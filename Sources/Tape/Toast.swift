@@ -3,10 +3,9 @@ import SwiftUI
 
 /// The island at the top of the screen ("Meeting detected", "Recording saved", "Recap ready"): it grows out of
 /// the camera notch (black, so it reads as the notch getting bigger), shows an icon, a title over a line of
-/// detail and up to two buttons (or a field, to name a recording right there), and shrinks back into the notch
-/// when it's done. On a screen without a notch it drops from the top edge instead. It floats over every Space,
-/// full-screen calls included, and never takes focus from the call unless you click into its field. One at a
-/// time; VoiceOver reads it out when it appears.
+/// detail and up to two buttons, and shrinks back into the notch when it's done. On a screen without a notch it
+/// drops from the top edge instead. It floats over every Space, full-screen calls included, and never takes
+/// focus from the call. One at a time; VoiceOver reads it out when it appears.
 @MainActor
 final class Toast {
     static let shared = Toast()
@@ -17,13 +16,6 @@ final class Toast {
         let run: () -> Void
     }
 
-    /// A text field in the card (naming a recording): what it suggests, and what to do with the text.
-    struct Field {
-        let placeholder: String
-        var initial = ""
-        let submit: (String) -> Void
-    }
-
     struct Card {
         let id: String
         var symbol = "waveform"
@@ -31,12 +23,11 @@ final class Toast {
         /// In monospaced type after the title ("42:10").
         var detail: String?
         var message: String?
-        /// Small, on the right of the title row.
-        var note: String?
-        var field: Field?
         var primary: Action?
         var secondary: Action?
         var timeout: TimeInterval? = 8
+        /// Something to answer: the island glows as it opens.
+        var attention = false
         /// Called when the card goes away without a button being used (closed, or timed out).
         var onDismiss: (() -> Void)?
     }
@@ -47,7 +38,7 @@ final class Toast {
         init(open: Bool = false) { self.open = open }
     }
 
-    static let width: CGFloat = 480
+    static let width: CGFloat = 500
 
     private var panel: NSPanel?
     private var model: Model?
@@ -69,15 +60,12 @@ final class Toast {
         let island = IslandView(card: card, notch: notch, model: model) { [weak self] action in
             if let action { action.run() }
             self?.hide(used: action != nil)
-        } editing: { [weak self] in
-            // Typing a name: the card stays until it's saved or closed.
-            self?.hideWork?.cancel()
         }
         let view = FirstClickHostingView(rootView: island)
         // Full size: the open island's own height, plus room for its shadow.
         let size = NSSize(width: Self.width + 40, height: Self.openSize(card, notch: notch).height)
 
-        let panel = KeyablePanel(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless, .nonactivatingPanel],
+        let panel = NSPanel(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless, .nonactivatingPanel],
                                  backing: .buffered, defer: false)
         // Above the menu bar, which the island grows over (and above the notch's own island).
         panel.level = NSWindow.Level(rawValue: NSWindow.Level.mainMenu.rawValue + 3)
@@ -136,7 +124,7 @@ final class Toast {
     }
 
     private static func openSize(_ card: Card, notch: CGSize?) -> NSSize {
-        NSHostingView(rootView: IslandView(card: card, notch: notch, model: Model(open: true)) { _ in } editing: {}).fittingSize
+        NSHostingView(rootView: IslandView(card: card, notch: notch, model: Model(open: true)) { _ in }).fittingSize
     }
 
     /// Debug: each kind of card drawn into a PNG, open, under a notch like a 14" MacBook Pro's.
@@ -144,14 +132,14 @@ final class Toast {
         let cards: [(String, Card)] = [
             ("island-meeting", Card(id: "call", symbol: "video", title: "Meeting detected", message: "Google Meet in Opera GX",
                                     primary: .init(title: "Record", symbol: "record.circle") {}, secondary: .init(title: "Not now") {})),
-            ("island-saved", Card(id: "saved", symbol: "checkmark.circle", title: "Recording saved", detail: "42:10", note: "Recap starts now",
-                                  field: .init(placeholder: "Name it, e.g. Weekly sync with Ploy HR") { _ in },
-                                  primary: .init(title: "Save") {}, secondary: .init(title: "Not now") {})),
+            ("island-saved", Card(id: "saved", symbol: "checkmark.circle", title: "Recording saved", detail: "42:10",
+                                  message: "Weekly sync with Ploy HR", primary: .init(title: "Make recap", symbol: "sparkles") {},
+                                  secondary: .init(title: "Open") {})),
             ("island-recap", Card(id: "recap", symbol: "doc.text", title: "Recap ready", message: "AI-Powered CV Automation · 6 topics",
                                   primary: .init(title: "Open") {})),
         ]
         for (name, card) in cards {
-            let view = NSHostingView(rootView: IslandView(card: card, notch: CGSize(width: 185, height: 32), model: Model(open: true)) { _ in } editing: {}
+            let view = NSHostingView(rootView: IslandView(card: card, notch: CGSize(width: 185, height: 32), model: Model(open: true)) { _ in }
                 .background(Color(hex: 0xC9C9C9)))
             view.frame = NSRect(origin: .zero, size: openSize(card, notch: CGSize(width: 185, height: 32)))
             Snapshot.write(view, to: folder.appendingPathComponent("\(name).png"))
@@ -165,11 +153,6 @@ final class Toast {
         }
         return CGSize(width: screen.frame.width - left.width - right.width, height: screen.safeAreaInsets.top)
     }
-}
-
-/// Can take typing (the name field) when clicked, without making Tape the active app.
-private final class KeyablePanel: NSPanel {
-    override var canBecomeKey: Bool { true }
 }
 
 /// Buttons work on the first click, without the island's window becoming key first.
@@ -228,9 +211,7 @@ private struct IslandView: View {
     let notch: CGSize?
     @ObservedObject var model: Toast.Model
     let done: (Toast.Action?) -> Void
-    let editing: () -> Void
-    @State private var text = ""
-    @FocusState private var focused: Bool
+    @State private var glow = false
 
     /// Below the notch (or the menu bar, where there's none).
     private var top: CGFloat { notch?.height ?? NSStatusBar.system.thickness }
@@ -250,6 +231,18 @@ private struct IslandView: View {
                 .background(IslandShape().fill(Color.black))
                 .clipShape(IslandShape())
                 .shadow(color: .black.opacity(model.open ? 0.35 : 0), radius: 18, y: 8)
+                // Two soft rings going out from the island.
+                .overlay {
+                    if card.attention && !Toast.reduceMotion {
+                        IslandShape().stroke(Color.white.opacity(glow ? 0 : 0.55), lineWidth: glow ? 6 : 2)
+                            .scaleEffect(glow ? 1.06 : 1, anchor: .top)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .onChange(of: model.open) {
+                    guard model.open, card.attention, !Toast.reduceMotion else { return }
+                    withAnimation(.easeOut(duration: 1.1).delay(0.35).repeatCount(2, autoreverses: false)) { glow = true }
+                }
             Spacer(minLength: 0)
         }
         .frame(width: Toast.width + 40)
@@ -259,57 +252,24 @@ private struct IslandView: View {
         .accessibilityLabel(card.title)
     }
 
-    @ViewBuilder private var content: some View {
-        if let field = card.field {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 10) {
-                    Image(systemName: card.symbol).font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.Island.text)
-                        .accessibilityHidden(true)
-                    titleLine
-                    Spacer(minLength: 8)
-                    if let note = card.note { Text(note).font(Theme.sans(12)).foregroundStyle(Theme.Island.text2) }
-                    close
-                }
-                HStack(spacing: 8) {
-                    TextField(field.placeholder, text: $text)
-                        .textFieldStyle(.plain)
-                        .font(Theme.sans(13))
-                        .foregroundStyle(Theme.Island.text)
-                        .focused($focused)
-                        .onSubmit { submit(field) }
-                        .onChange(of: focused) { if focused { editing() } }
-                        .onChange(of: text) { editing() }
-                        .padding(.horizontal, 12).frame(height: 34)
-                        .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.1)))
-                        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.white.opacity(focused ? 0.5 : 0.2)))
-                        .accessibilityLabel("Recording name")
-                    if let secondary = card.secondary { IslandButton(title: secondary.title) { done(secondary) } }
-                    if let primary = card.primary {
-                        IslandButton(title: primary.title, prominent: true) { submit(field) }
-                            .disabled(text.trimmingCharacters(in: .whitespaces).isEmpty)
-                    }
+    private var content: some View {
+        HStack(spacing: 12) {
+            RoundedRectangle(cornerRadius: 9).fill(Theme.Island.tile)
+                .overlay(Image(systemName: card.symbol).font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.Island.text))
+                .frame(width: 34, height: 34)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                titleLine
+                if let message = card.message {
+                    Text(message).font(Theme.sans(12)).foregroundStyle(Theme.Island.text2).lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            .onAppear { text = field.initial }
-        } else {
-            HStack(spacing: 12) {
-                RoundedRectangle(cornerRadius: 9).fill(Theme.Island.tile)
-                    .overlay(Image(systemName: card.symbol).font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.Island.text))
-                    .frame(width: 34, height: 34)
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 2) {
-                    titleLine
-                    if let message = card.message {
-                        Text(message).font(Theme.sans(12)).foregroundStyle(Theme.Island.text2).lineLimit(2)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                .layoutPriority(1)
-                Spacer(minLength: 4)
-                if let secondary = card.secondary { IslandButton(title: secondary.title, symbol: secondary.symbol) { done(secondary) } }
-                if let primary = card.primary { IslandButton(title: primary.title, symbol: primary.symbol, prominent: true) { done(primary) } }
-                close
-            }
+            .layoutPriority(1)
+            Spacer(minLength: 4)
+            if let secondary = card.secondary { IslandButton(title: secondary.title, symbol: secondary.symbol) { done(secondary) } }
+            if let primary = card.primary { IslandButton(title: primary.title, symbol: primary.symbol, prominent: true) { done(primary) } }
+            close
         }
     }
 
@@ -317,7 +277,7 @@ private struct IslandView: View {
         HStack(spacing: 8) {
             Text(card.title).font(Theme.sans(14.5, .semibold)).foregroundStyle(Theme.Island.text).lineLimit(1)
                 .fixedSize()
-            if let detail = card.detail { Text(detail).font(Theme.mono(12)).foregroundStyle(Theme.Island.text2) }
+            if let detail = card.detail { Text(detail).font(Theme.mono(12)).foregroundStyle(Theme.Island.text2).lineLimit(1).fixedSize() }
         }
     }
 
@@ -331,13 +291,5 @@ private struct IslandView: View {
         .buttonStyle(.plainPointer)
         .help("Dismiss")
         .accessibilityLabel("Dismiss")
-    }
-
-    private func submit(_ field: Toast.Field) {
-        let name = text.trimmingCharacters(in: .whitespaces)
-        guard !name.isEmpty else { return }
-        field.submit(name)
-        text = ""
-        done(Toast.Action(title: "", run: {}))
     }
 }

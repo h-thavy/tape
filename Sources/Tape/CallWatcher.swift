@@ -89,6 +89,14 @@ final class CallWatcher: ObservableObject {
         return nil
     }
 
+    /// The meeting's own title from the call app's windows ("Weekly sync"), when one shows it.
+    static func meetingTitle(pid: pid_t) -> String? {
+        guard AXIsProcessTrusted() else { return nil }
+        return AXAllWindows.windows(pid: pid).lazy
+            .compactMap { AXAllWindows.attribute($0, kAXTitleAttribute) }
+            .compactMap(CallRules.meetingTitle(fromWindowTitle:)).first
+    }
+
     /// The meeting platform when it can be told (a meeting app, or a browser window titled like a call), else
     /// the app's name.
     private static func displayName(_ found: Found) -> String {

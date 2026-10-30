@@ -31,6 +31,7 @@ final class Onboarding: ObservableObject {
         if first {
             try? SMAppService.mainApp.register()
             SettingsModel.shared.openAtLogin = SMAppService.mainApp.status == .enabled
+            PermissionPrompt.shared.start()
         }
         MainWindow.shared.show()
     }
@@ -63,6 +64,9 @@ final class Onboarding: ObservableObject {
             view.frame = NSRect(x: 0, y: 0, width: 760, height: 580)
             Snapshot.write(view, to: folder.appendingPathComponent("onboarding-\(step + 1).png"))
         }
+        let prompt = NSHostingView(rootView: PermissionPromptView {})
+        prompt.frame = NSRect(origin: .zero, size: prompt.fittingSize)
+        Snapshot.write(prompt, to: folder.appendingPathComponent("permissions.png"))
     }
 }
 
@@ -116,15 +120,15 @@ private struct OnboardingView: View {
 
     private var title: String {
         ["Tape records your calls", "It asks when a call starts", "Your mic follows your mute button",
-         "The recap is ready when it ends", "Three permissions", "Your API keys", "You're set"][step]
+         "A recap when you want one", "Three permissions", "Your API keys", "You're set"][step]
     }
 
     private var text: String {
         [
-            "Any call, in any app. The recording is saved the moment the call ends, sounding exactly like the call, and a transcript and a recap follow. No account: your recordings stay on this Mac.",
+            "Any call, in any app. The recording is saved the moment the call ends, sounding exactly like the call, and you can turn it into a transcript and a recap. No account: your recordings stay on this Mac.",
             "Zoom, Google Meet, Teams, Slack, WhatsApp… when an app starts a call, Tape asks in the notch. One click records, and it stops by itself when the call ends.",
             "While you're muted in the meeting, your mic is left out of the recording entirely. Unmute to speak and it's recorded again. The others are always recorded.",
-            "Gemini writes the transcript, Khmer and English as spoken. Claude turns it into a recap: each topic with its decisions and open questions, the next steps, and a link to the moment it was said.",
+            "Press Make recap on a recording: Gemini writes the transcript, Khmer and English as spoken, and Claude the recap, with each topic's decisions, the next steps and a link to the moment it was said. Only the calls you choose use your credits.",
             "Tape needs your microphone (your voice), system audio recording (the other people), and Accessibility (to see the call's mute button). Nothing leaves your Mac except to make a recap.",
             "Recaps use your own Gemini and Anthropic keys, kept in your Mac's Keychain. You can also add them later in Settings.",
             "Tape waits in the notch and the menu bar. Hover over the notch any time to record, import a recording or open Tape.",
@@ -427,6 +431,92 @@ private struct QuickActionsScene: View {
 
 // MARK: - Permissions and keys
 
+/// Asks for the permissions Tape can't work without: at every launch (after the introduction, which asks
+/// the first time) while one is missing, and whenever one is turned off while Tape runs. It closes by itself
+/// once everything is allowed.
+@MainActor
+final class PermissionPrompt {
+    static let shared = PermissionPrompt()
+    private var window: NSWindow?
+    private var timer: Timer?
+    /// What was missing when last checked: a new gap (a permission turned off) asks again.
+    private var missing: Set<String> = []
+
+    static var current: Set<String> {
+        var missing: Set<String> = []
+        if !Permissions.microphone { missing.insert("microphone") }
+        if Permissions.systemAudio == false { missing.insert("system audio") }
+        if !Permissions.accessibility { missing.insert("accessibility") }
+        return missing
+    }
+
+    func start() {
+        guard timer == nil else { return }
+        missing = []
+        check()
+        timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { _ in
+            MainActor.assumeIsolated { PermissionPrompt.shared.check() }
+        }
+    }
+
+    private func check() {
+        guard Onboarding.done else { return }
+        let now = Self.current
+        if now.isEmpty {
+            window?.orderOut(nil)
+        } else if !now.isSubset(of: missing) {
+            show()
+        }
+        missing = now
+    }
+
+    func show() {
+        let window = window ?? makeWindow()
+        self.window = window
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    private func makeWindow() -> NSWindow {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 300),
+                              styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
+        window.title = "Tape needs your permission"
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.isReleasedWhenClosed = false
+        window.level = .floating
+        window.contentView = NSHostingView(rootView: PermissionPromptView { [weak window] in window?.orderOut(nil) })
+        window.center()
+        return window
+    }
+}
+
+private struct PermissionPromptView: View {
+    let close: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Image(systemName: "exclamationmark.shield").font(.system(size: 20, weight: .semibold)).foregroundStyle(Theme.working)
+                Text("Tape needs your permission").font(Theme.display(22)).tracking(-0.6).accessibilityAddTraits(.isHeader)
+            }
+            Text("Without these, Tape can't record the call properly: your microphone (your voice), system audio (the other people), and Accessibility (to leave your mic out while you're muted). Allow each one, then switch Tape on in System Settings.")
+                .font(Theme.sans(13.5)).lineSpacing(4).foregroundStyle(Theme.body).fixedSize(horizontal: false, vertical: true)
+            PermissionList().padding(.top, 4)
+            HStack {
+                Spacer()
+                Button("Later", action: close).buttonStyle(.pillQuiet).keyboardShortcut(.cancelAction)
+            }
+            .padding(.top, 4)
+        }
+        .padding(.horizontal, 36).padding(.top, 36).padding(.bottom, 22)
+        .frame(width: 760)
+        .background(Theme.background)
+        .foregroundStyle(Theme.ink)
+        .tint(Theme.accent)
+    }
+}
+
 private struct PermissionList: View {
     @State private var refresh = 0
     @State private var audioGranted = false
@@ -450,7 +540,7 @@ private struct PermissionList: View {
 
     private func item(_ title: String, granted: Bool, pane: String, request: @escaping () -> Void) -> some View {
         HStack(spacing: 8) {
-            Text(title).font(Theme.sans(13, .medium))
+            Text(title).font(Theme.sans(13, .medium)).lineLimit(1).fixedSize()
             Spacer(minLength: 4)
             if granted {
                 Label("Allowed", systemImage: "checkmark.circle.fill").font(Theme.sans(12, .semibold)).foregroundStyle(Theme.ready)

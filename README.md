@@ -32,16 +32,18 @@ curl -fsSL https://raw.githubusercontent.com/h-thavy/tape/main/scripts/install.s
   calls; on a Mac without a notch it drops from the top edge). Or turn on *Record calls without asking*.
 - **Lives in the notch.** Hover over the notch for quick actions: record, import, open Tape, the latest
   recording. While recording, the notch shows the time and your mic's level (a crossed-out mic while you're
-  muted); when the call ends you can name the recording right there.
+  muted). Drag recordings to the notch to import them.
 - **Stops when the call ends.** The recording is encoded while you talk, so it's saved the moment the call
   ends, trimmed to where the call left the microphone.
-- **Writes the recap.** The recording goes to Gemini (`gemini-3.8-flash`, the best at Khmer mixed with
+- **Writes the recap when you ask.** Press *Make recap* on a recording (or on the "Recording saved" card, or
+  for several at once) and it goes to Gemini (`gemini-3.8-flash`, the best at Khmer mixed with
   English) for a timestamped transcript, then to Claude (Claude Opus 5.5) for the recap: what the meeting was,
   one section per topic with the decisions, details and open questions, and the next steps. Recordings over
   12 minutes go to Gemini in 10-minute parts (it fails on long audio in one go), with the speaker labels
   carried from one part to the next; a failure on Gemini's side is retried. Both are saved next to the
   recording and shown in the app, where a map of the meeting shows who spoke when and where each topic
-  starts (click to play from there):
+  starts (click to play from there). Recaps use your keys' credits, so none is made until you ask, unless
+  you turn on *Make recaps automatically* in Settings:
 
   ```
   ~/Documents/Tape/2026-10-30 14.05 Google Meet in Opera GX.m4a
@@ -51,12 +53,17 @@ curl -fsSL https://raw.githubusercontent.com/h-thavy/tape/main/scripts/install.s
 
 - **Recaps recordings you already have.** Use **Import** (or drop files on the window) for recordings from
   before Tape or from anywhere else: audio (m4a, mp3, wav, aac, flac, ogg…) or video (the sound is taken out).
-  Recordings already in `~/Documents/Tape` show up by themselves, with a "Make the recap" button.
+  Recordings already in `~/Documents/Tape` show up by themselves, with a "Make recap" button.
 - **Follows the call's mute button.** Muted in the meeting: your mic is left out entirely. Unmuted: it's
-  recorded. (Needs Accessibility. A browser shows only its visible tab, so while a browser call's tab is in
+  recorded. Tape asks for its permissions at every launch while one is missing, and again whenever one is
+  turned off; while it can't see the mute button, the notch and the window say so. (Needs Accessibility. A browser shows only its visible tab, so while a browser call's tab is in
   the background Tape keeps the last state it saw.)
-- **Names.** When a recording is saved, Tape asks whether to name it; click a recording's title to rename it
-  later. Its files take the name (`<name>.m4a`, `.transcript.txt`, `.recap.md`), and Claude sees it.
+- **Names itself.** A recording takes the meeting's title when its window shows one ("Meet – Weekly sync",
+  "Pricing review | Microsoft Teams"), else the topic from its recap. Click the title to rename it. Its files
+  take the name (`<name>.m4a`, `.transcript.txt`, `.recap.md`), and Claude sees it.
+- **Library.** ⌘-click or ⇧-click to pick several recordings, then move them to the Trash (Finder's Put Back
+  restores them). *Copy recording* puts the audio file on the clipboard, to paste into a chat, an email or
+  Finder; recordings can also be dragged out of the library.
 - **Updates itself.** Tape checks GitHub for a new version and updates in one click (never during a recording
   or a recap), keeping your recordings, keys and settings. No need to run the install command again.
 - **Switching devices mid-call is seamless.** Speakers → AirPods, a new mic, a headset going into call mode:

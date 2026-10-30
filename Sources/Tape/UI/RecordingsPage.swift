@@ -67,11 +67,15 @@ struct LibraryColumn: View {
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(12)
                     }
+                    let groups = groups
+                    let order = groups.flatMap { $0.items.map(\.id) }
                     ForEach(groups, id: \.title) { group in
                         SectionLabel(text: group.title)
                             .padding(.horizontal, 12).padding(.top, 12).padding(.bottom, 4)
                             .accessibilityAddTraits(.isHeader)
-                        ForEach(group.items) { item in LibraryRow(item: item, selected: item.id == shownID) }
+                        ForEach(group.items) { item in
+                            LibraryRow(item: item, selected: main.marked.isEmpty ? item.id == shownID : main.marked.contains(item.id), order: order)
+                        }
                     }
                 }
                 .padding(.horizontal, 8).padding(.bottom, 14)
@@ -119,12 +123,12 @@ struct LibraryColumn: View {
 private struct LibraryRow: View {
     let item: RecordingItem
     let selected: Bool
+    let order: [String]
     @State private var hovering = false
 
     var body: some View {
         Button {
-            MainWindow.shared.page = .recordings
-            MainWindow.shared.selected = item.id
+            MainWindow.shared.pick(item.id, in: order)
         } label: {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline) {
@@ -151,15 +155,31 @@ private struct LibraryRow: View {
         }
         .buttonStyle(.plainPointer)
         .onHover { hovering = $0 }
+        // Drag it out: the audio file, into a chat, an email or Finder.
+        .onDrag { NSItemProvider(contentsOf: Library.shared.audioURL(item)) ?? NSItemProvider() }
         .contextMenu {
             Button("Rename…") { MainWindow.shared.show(recording: item.id, rename: true) }
             Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([Library.shared.audioURL(item)]) }
+            if item.status == .notProcessed {
+                Button("Make Recap") { Processor.shared.process(item.id) }
+            }
             if item.status == .ready || item.status == .failed {
                 Button("Write the recap again") { Processor.shared.process(item.id, again: true) }
+            }
+            let marked = MainWindow.shared.marked
+            let several = marked.count > 1 && marked.contains(item.id)
+            Button(several ? "Copy \(marked.count) Recording Files" : "Copy Recording File") {
+                MainWindow.copyFiles(several ? marked : [item.id])
+            }
+            Divider()
+            Button(several ? "Move \(marked.count) Recordings to Trash…" : "Move to Trash…") {
+                MainWindow.shared.trash(several ? marked : [item.id])
             }
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(item.displayTitle), \(Recorder.duration(item.duration)), \(item.created.formatted(date: .abbreviated, time: .shortened)), \(RecapStatus.text(item))")
+        .accessibilityHint("Command-click or Shift-click to select several")
+        .accessibilityAction(named: "Move to Trash") { MainWindow.shared.trash([item.id]) }
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
         .animation(.easeOut(duration: 0.12), value: hovering)
     }
@@ -265,6 +285,8 @@ private struct RecordingNowRow: View {
 /// Bringing in recordings made before Tape (or anywhere else), to recap them.
 @MainActor
 enum Importer {
+    enum Source { case window, notch }
+
     static func choose() {
         let panel = NSOpenPanel()
         panel.title = "Import recordings"
@@ -273,8 +295,9 @@ enum Importer {
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         panel.allowedContentTypes = [.audio, .movie]
+        NSApp.activate(ignoringOtherApps: true)
         guard panel.runModal() == .OK else { return }
-        start(panel.urls)
+        importFiles(panel.urls)
     }
 
     static func load(_ providers: [NSItemProvider]) {
@@ -286,16 +309,44 @@ enum Importer {
                     urls.append(fileURL)
                 }
             }
-            start(urls)
+            importFiles(urls)
         }
     }
 
-    private static func start(_ urls: [URL]) {
-        guard !urls.isEmpty else { return }
+    /// Imports the audio and video among `urls` and makes their recaps. From the window, a single recording
+    /// opens; from the notch, a card says what was imported.
+    static func importFiles(_ urls: [URL], from source: Source = .window) {
+        let media = urls.filter { url in
+            guard let type = try? url.resourceValues(forKeys: [.contentTypeKey]).contentType else { return false }
+            return type.conforms(to: .audio) || type.conforms(to: .movie) || type.conforms(to: .audiovisualContent)
+        }
+        guard !media.isEmpty else {
+            if !urls.isEmpty {
+                Toast.shared.show(.init(id: "import", symbol: "exclamationmark.triangle", title: "Nothing to import",
+                                        message: "Tape imports recordings: audio (m4a, mp3, wav…) or video files."))
+            }
+            return
+        }
         Task {
-            let added = await Library.shared.importFiles(urls)
-            for item in added { Processor.shared.process(item.id) }
-            if added.count == 1, let item = added.first { MainWindow.shared.show(recording: item.id) }
+            let added = await Library.shared.importFiles(media)
+            let auto = Settings.autoRecap
+            if auto { for item in added { Processor.shared.process(item.id) } }
+            guard let first = added.first else { return }
+            switch source {
+            case .window:
+                if added.count == 1 { MainWindow.shared.show(recording: first.id) }
+            case .notch:
+                let open = Toast.Action(title: "Open") { MainWindow.shared.show(recording: first.id) }
+                Toast.shared.show(.init(
+                    id: "import", symbol: "square.and.arrow.down",
+                    title: added.count == 1 ? "Imported" : "Imported \(added.count) recordings",
+                    message: added.count == 1 ? first.displayTitle + (auto ? " · recap starts now" : "") : (auto ? "Their recaps start now" : nil),
+                    primary: auto ? open : .init(title: added.count == 1 ? "Make recap" : "Make recaps", symbol: "sparkles") {
+                        for item in added { Processor.shared.process(item.id) }
+                    },
+                    secondary: auto ? nil : open,
+                    timeout: 12))
+            }
         }
     }
 }
@@ -308,7 +359,9 @@ struct ReaderPane: View {
     @ObservedObject private var settings = SettingsModel.shared
 
     var body: some View {
-        if let item = library.item(main.selected ?? "") ?? library.items.first {
+        if main.marked.count > 1 {
+            SelectionPane(items: library.items.filter { main.marked.contains($0.id) })
+        } else if let item = library.item(main.selected ?? "") ?? library.items.first {
             Reader(item: item).id(item.id)
         } else {
             VStack(spacing: 14) {
@@ -325,6 +378,52 @@ struct ReaderPane: View {
     }
 }
 
+/// Several recordings picked: how many, how long, and what can be done to all of them at once.
+private struct SelectionPane: View {
+    let items: [RecordingItem]
+    @ObservedObject private var main = MainWindow.shared
+
+    var body: some View {
+        VStack(spacing: 16) {
+            ZStack {
+                ForEach(0..<min(3, items.count), id: \.self) { k in
+                    RoundedRectangle(cornerRadius: 12).fill(Theme.raised)
+                        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.line))
+                        .frame(width: 150, height: 96)
+                        .rotationEffect(.degrees(Double(k - 1) * 5))
+                        .offset(y: CGFloat(k - 1) * -4)
+                }
+                TapeMarkView(size: 46)
+            }
+            .frame(height: 120)
+            .accessibilityHidden(true)
+            Text("\(items.count) recordings selected").font(Theme.display(22, .semibold)).tracking(-0.5)
+            Text("\(Recorder.duration(items.reduce(0) { $0 + $1.duration })) in all").font(Theme.sans(13.5)).foregroundStyle(Theme.ink2)
+            HStack(spacing: 10) {
+                Button("Clear selection") { main.marked = [] }
+                    .buttonStyle(.pillQuiet)
+                    .keyboardShortcut(.cancelAction)
+                CopyFilesButton(ids: Set(items.map(\.id)))
+                let waiting = items.filter { $0.status == .notProcessed || $0.status == .failed }
+                if !waiting.isEmpty {
+                    Button { for item in waiting { Processor.shared.process(item.id) } } label: {
+                        Label(waiting.count == 1 ? "Make 1 recap" : "Make \(waiting.count) recaps", systemImage: "sparkles")
+                    }
+                    .buttonStyle(.pillQuiet)
+                }
+                Button { main.trash(Set(items.map(\.id))) } label: { Label("Move to Trash", systemImage: "trash") }
+                    .buttonStyle(.pill)
+                    .keyboardShortcut(.delete, modifiers: .command)
+                    .help("Move to Trash (⌘⌫)")
+            }
+            .padding(.top, 6)
+            Text("⌘-click or ⇧-click recordings in the library to change the selection.").font(Theme.sans(12)).foregroundStyle(Theme.ink3)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .contain)
+    }
+}
+
 private struct Reader: View {
     let item: RecordingItem
     @StateObject private var player = AudioPlayer()
@@ -336,10 +435,14 @@ private struct Reader: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text([item.created.formatted(.dateTime.weekday(.wide).day().month(.wide)),
-                          item.created.formatted(date: .omitted, time: .shortened), item.app.map(LibraryRow.shortApp)]
-                        .compactMap { $0 }.joined(separator: " · "))
-                        .font(Theme.sans(12.5)).foregroundStyle(Theme.ink3)
+                    HStack {
+                        Text([item.created.formatted(.dateTime.weekday(.wide).day().month(.wide)),
+                              item.created.formatted(date: .omitted, time: .shortened), item.app.map(LibraryRow.shortApp)]
+                            .compactMap { $0 }.joined(separator: " · "))
+                            .font(Theme.sans(12.5)).foregroundStyle(Theme.ink3)
+                        Spacer()
+                        CopyFileButton(item: item)
+                    }
                     RecordingName(item: item)
                 }
 
@@ -405,6 +508,8 @@ private struct Reader: View {
             if item.status == .ready || item.status == .failed {
                 Button("Write the recap again") { Processor.shared.process(item.id, again: true) }
             }
+            Divider()
+            Button("Move to Trash…") { main.trash([item.id]) }
         } label: {
             Image(systemName: "ellipsis").font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.ink2)
                 .frame(width: 28, height: 28)
@@ -432,13 +537,43 @@ private struct TabButton: View {
     }
 }
 
+/// Copies the recording's audio file, to paste into a chat, an email or Finder.
+private struct CopyFileButton: View {
+    let item: RecordingItem
+    @State private var copied = false
+
+    var body: some View {
+        TextIconButton(title: copied ? "Copied: paste it anywhere" : "Copy recording", systemImage: copied ? "checkmark" : "waveform") {
+            MainWindow.copyFiles([item.id])
+            copied = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
+        }
+        .help("Copy the audio file (\(item.audioFile)) to paste into a chat, an email or Finder")
+        .accessibilityLabel(copied ? "Recording file copied" : "Copy recording file")
+    }
+}
+
+/// The same for several recordings.
+private struct CopyFilesButton: View {
+    let ids: Set<String>
+    @State private var copied = false
+
+    var body: some View {
+        Button { MainWindow.copyFiles(ids); copied = true; DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false } } label: {
+            Label(copied ? "Copied" : "Copy files", systemImage: copied ? "checkmark" : "doc.on.doc")
+        }
+        .buttonStyle(.pillQuiet)
+        .help("Copy the audio files to paste into a chat, an email or Finder")
+    }
+}
+
 /// "Copy", then "Copied" for a moment.
 private struct CopyButton: View {
     let text: String
     @State private var copied = false
 
     var body: some View {
-        TextIconButton(title: copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc") {
+        TextIconButton(title: copied ? "Copied" : "Copy text", systemImage: copied ? "checkmark" : "doc.on.doc") {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
             copied = true
@@ -518,8 +653,10 @@ private struct StatusBanner: View {
                 Button("Open Settings") { MainWindow.shared.page = .settings }.buttonStyle(.pillQuiet).controlSize(.small)
             }
         case .notProcessed:
-            banner(icon: AnyView(Image(systemName: "doc.text").foregroundStyle(Theme.ink2)), text: "This recording has no recap yet.", detail: nil) {
-                Button("Make the recap") { Processor.shared.process(item.id) }.buttonStyle(.pill).controlSize(.small)
+            banner(icon: AnyView(Image(systemName: "sparkles").foregroundStyle(Theme.ink2)), text: "No recap yet",
+                   detail: "Gemini writes the transcript and Claude the recap, with your API keys (\(Self.estimate(item.duration))).") {
+                Button { Processor.shared.process(item.id) } label: { Label("Make recap", systemImage: "sparkles") }
+                    .buttonStyle(.pill).controlSize(.small)
             }
         case .failed:
             banner(icon: AnyView(Image(systemName: "exclamationmark.triangle").foregroundStyle(Theme.failed)),
@@ -527,6 +664,14 @@ private struct StatusBanner: View {
                 Button("Try again") { Processor.shared.process(item.id) }.buttonStyle(.pill).controlSize(.small)
             }
         }
+    }
+
+    /// Roughly what a recap of this length uses: audio is about 32 tokens a second for Gemini; the transcript
+    /// Claude reads is about 3 tokens a second of talk.
+    static func estimate(_ seconds: Double) -> String {
+        let minutes = max(1, Int((seconds / 60).rounded()))
+        let audio = Int(seconds * 32 / 1000), text = Int(seconds * 3 / 1000)
+        return "\(minutes) min of audio: about \(max(1, audio))k tokens for Gemini, \(max(1, text))k for Claude"
     }
 
     private func banner(icon: AnyView, text: String, detail: String?,

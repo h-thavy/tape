@@ -26,3 +26,22 @@ final class CallRulesTests: XCTestCase {
         XCTAssertEqual(CallRules.muteState(labels: ["Share screen"]), .unknown)
     }
 }
+
+final class MeetingTitleTests: XCTestCase {
+    func testTitlesFromWindows() {
+        XCTAssertEqual(CallRules.meetingTitle(fromWindowTitle: "Meet – Weekly sync with Ploy HR - Google Chrome - Work"), "Weekly sync with Ploy HR")
+        XCTAssertEqual(CallRules.meetingTitle(fromWindowTitle: "Meet - AI-Powered CV Automation - Opera"), "AI-Powered CV Automation")
+        XCTAssertEqual(CallRules.meetingTitle(fromWindowTitle: "Meet - Pricing review - Camera or microphone recording - Google Chrome"), "Pricing review")
+        XCTAssertEqual(CallRules.meetingTitle(fromWindowTitle: "Payroll module review | Microsoft Teams"), "Payroll module review")
+        XCTAssertEqual(CallRules.meetingTitle(fromWindowTitle: "Bank NOC follow-up (Meeting) | Microsoft Teams"), "Bank NOC follow-up")
+    }
+
+    func testNoTitle() {
+        XCTAssertNil(CallRules.meetingTitle(fromWindowTitle: "Meet - abc-defg-hij - Opera"))
+        XCTAssertNil(CallRules.meetingTitle(fromWindowTitle: "Meet – abc-defg-hij"))
+        XCTAssertNil(CallRules.meetingTitle(fromWindowTitle: "Zoom Meeting"))
+        XCTAssertNil(CallRules.meetingTitle(fromWindowTitle: "Calendar | Microsoft Teams"))
+        XCTAssertNil(CallRules.meetingTitle(fromWindowTitle: "YouTube - Google Chrome"))
+        XCTAssertNil(CallRules.meetingTitle(fromWindowTitle: "Meet - Google Chrome"))
+    }
+}

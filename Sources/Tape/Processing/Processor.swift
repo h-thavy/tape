@@ -79,6 +79,8 @@ final class Processor {
                 $0.status = .ready
                 $0.detail = nil
                 $0.title = RecapFormat.title(of: recap)
+                // Not named after the meeting (or by you): named after what it was about.
+                if $0.name == nil, let title = $0.title, !Library.fileSafe(title).isEmpty { $0.name = Library.fileSafe(title) }
             }
             log.notice("Recap for \(id, privacy: .public) ready after \(Int(Date().timeIntervalSince(started))) s")
             let named = library.applyName(id)

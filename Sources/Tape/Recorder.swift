@@ -18,6 +18,9 @@ final class Recorder: ObservableObject {
     }
 
     private var session: Session?
+    /// The meeting's title, as last seen in its window (looked for every 5 seconds while recording).
+    private var meetingTitle: String?
+    private var titleTimer: Timer?
     /// Started for a detected call, so it stops when the call ends.
     private(set) var followsCall = false
     /// Muted in the call app (as last seen).
@@ -29,6 +32,8 @@ final class Recorder: ObservableObject {
     private(set) var saving = 0
     var onChange: (() -> Void)?
     var isRecording: Bool { session != nil }
+    /// Recording a call whose mute button Tape can't see (Accessibility isn't allowed): your mic is always in.
+    var blindToMute: Bool { session?.call != nil && muteWatcher == nil }
     var startedAt: Date? { session?.startedAt }
     var callName: String? { session?.call?.name }
     private let log = Logger(subsystem: "io.github.h-thavy.tape", category: "recorder")
@@ -41,6 +46,8 @@ final class Recorder: ObservableObject {
             return
         }
         Recordings.prepareFolders()
+        // Answered: started from the window, the menu bar or the notch.
+        Toast.shared.dismiss("call")
         let stem = Recordings.name(at: Date(), app: call?.name)
         let url = Recordings.inProgress.appendingPathComponent(stem).appendingPathExtension("aac")
         let timeline = MuteTimeline()
@@ -55,7 +62,23 @@ final class Recorder: ObservableObject {
             try capture.start()
             session = Session(capture: capture, writer: writer, timeline: timeline, startedAt: Date(), call: call)
             self.followsCall = followsCall
-            if let call { follow(call) }
+            if let call {
+                follow(call)
+                meetingTitle = CallWatcher.meetingTitle(pid: call.pid)
+                // Every 5 seconds: the meeting's title (it can appear after joining), and the mute button once
+                // Accessibility is allowed mid-call.
+                titleTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        guard let self, let call = self.session?.call else { return }
+                        if let title = CallWatcher.meetingTitle(pid: call.pid) { self.meetingTitle = title }
+                        if self.muteWatcher == nil, Permissions.accessibility {
+                            self.follow(call)
+                            self.changed()
+                        }
+                    }
+                }
+                if blindToMute { warnBlindToMute() }
+            }
             // Already muted when the recording starts: from its very beginning.
             if isMuted { timeline.set(true, from: 0) }
             log.notice("Recording started (\(call?.name ?? "by hand", privacy: .public)); microphone \(Permissions.microphone ? "allowed" : "not allowed", privacy: .public), system audio \(Permissions.systemAudio.map { $0 ? "allowed" : "not allowed" } ?? "unknown", privacy: .public), accessibility \(Permissions.accessibility ? "allowed" : "not allowed", privacy: .public)")
@@ -75,16 +98,7 @@ final class Recorder: ObservableObject {
         unfollow()
         guard Permissions.accessibility else {
             log.error("Can't follow your mute button in \(call.name, privacy: .public): Accessibility isn't allowed for Tape")
-            guard !warnedAccessibility else { return }
-            warnedAccessibility = true
-            Toast.shared.show(.init(
-                id: "accessibility", symbol: "mic.slash", title: "Tape can't see when you're muted",
-                message: "Allow Tape in Accessibility, or your voice is recorded even while you're muted.",
-                primary: .init(title: "Open Settings") {
-                    Permissions.requestAccessibility()
-                    NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
-                },
-                timeout: 15))
+            if !warnedAccessibility { warnBlindToMute() }
             return
         }
         log.notice("Following your mute button in \(call.name, privacy: .public)")
@@ -93,6 +107,20 @@ final class Recorder: ObservableObject {
         watcher.start()
         muteWatcher = watcher
         isMuted = false
+    }
+
+    /// Your mic can't be left out while you're muted: says so, with the way to fix it. On the first call of a
+    /// launch, and on every recording that starts that way.
+    private func warnBlindToMute() {
+        warnedAccessibility = true
+        Toast.shared.show(.init(
+            id: "accessibility", symbol: "exclamationmark.triangle", title: "Tape can't see when you're muted",
+            message: "Allow Tape in Accessibility, or your voice is recorded even while you're muted.",
+            primary: .init(title: "Allow") {
+                Permissions.requestAccessibility()
+                NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+            },
+            timeout: 20))
     }
 
     /// The call is over (and not being recorded).
@@ -118,6 +146,11 @@ final class Recorder: ObservableObject {
     /// Stops and saves. `end` (host clock) trims the recording to when the call ended.
     func stop(endingAt end: Double? = nil) {
         guard let session else { return }
+        if let pid = session.call?.pid, let title = CallWatcher.meetingTitle(pid: pid) { meetingTitle = title }
+        let title = meetingTitle
+        meetingTitle = nil
+        titleTimer?.invalidate()
+        titleTimer = nil
         self.session = nil
         followsCall = false
         if #available(macOS 14.2, *) { (session.capture as? CallCapture)?.stop() }
@@ -145,19 +178,21 @@ final class Recorder: ObservableObject {
                                             message: "It's still in \(Recordings.inProgress.path)."))
                     return
                 }
-                // Into the library, and on to its transcript and recap.
-                let item = Library.shared.add(audio: saved, app: name, duration: seconds)
-                Processor.shared.process(item.id)
-                // Saved: name it right there in the island (the name is used for its files and in the recap).
+                // Into the library, named after the meeting when its window showed a title (else after the recap's
+                // topic, once it's written), and on to its transcript and recap.
+                let added = Library.shared.add(audio: saved, app: name, duration: seconds)
+                var id = added.id
+                if let title { id = Library.shared.rename(id, to: title) }
+                let auto = Settings.autoRecap
+                if auto { Processor.shared.process(id) }
+                let open = Toast.Action(title: "Open") { MainWindow.shared.show(recording: id) }
                 Toast.shared.show(.init(
                     id: "saved", symbol: "checkmark.circle", title: "Recording saved", detail: Counter.text(seconds),
-                    note: APIKeys.complete ? "Recap starts now" : "Add API keys for a recap",
-                    field: .init(placeholder: "Name it, e.g. Weekly sync") { name in
-                        Library.shared.rename(item.id, to: name)
-                    },
-                    primary: .init(title: "Save") {},
-                    secondary: .init(title: "Not now") {},
-                    timeout: 20))
+                    message: [title, auto ? (APIKeys.complete ? "Recap starts now" : "Add API keys for a recap") : nil]
+                        .compactMap { $0 }.joined(separator: " · ").nilIfEmpty,
+                    primary: auto ? open : .init(title: "Make recap", symbol: "sparkles") { Processor.shared.process(id) },
+                    secondary: auto ? nil : open,
+                    timeout: auto ? 6 : 12))
             }
         }
     }
@@ -195,4 +230,8 @@ final class LevelMeter: @unchecked Sendable {
         defer { lock.unlock() }
         return value
     }
+}
+
+extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }

@@ -17,7 +17,64 @@ final class MainWindow: ObservableObject {
     @Published var renaming: String?
     @Published var search = ""
     @Published var tab: Tab = .recap
+    /// Recordings picked with ⌘-click or ⇧-click (more than one: the reader shows what can be done to them).
+    @Published var marked: Set<String> = []
+    /// Where a ⇧-click range starts.
+    private var anchor: String?
     private var window: NSWindow?
+
+    /// A click on a recording in the library (`order`: the recordings as listed). ⌘ adds or removes it, ⇧
+    /// takes everything from the last one clicked to it, a plain click picks just it.
+    func pick(_ id: String, in order: [String]) {
+        let flags = NSEvent.modifierFlags
+        let shown = selected ?? order.first
+        page = .recordings
+        if flags.contains(.shift), let from = anchor ?? shown, let a = order.firstIndex(of: from), let b = order.firstIndex(of: id) {
+            marked = Set(order[min(a, b)...max(a, b)])
+        } else if flags.contains(.command) {
+            if marked.isEmpty, let shown { marked = [shown] }
+            if marked.contains(id) { marked.remove(id) } else { marked.insert(id) }
+            anchor = id
+        } else {
+            marked = []
+            anchor = id
+        }
+        if marked.count <= 1 {
+            selected = marked.first ?? id
+            marked = []
+        }
+    }
+
+    /// Puts the recordings' audio files on the clipboard, as files: pasting attaches them (in a chat, an email,
+    /// Finder).
+    static func copyFiles(_ ids: Set<String>) {
+        let urls = Library.shared.items.filter { ids.contains($0.id) }.map { Library.shared.audioURL($0) }
+            .filter { FileManager.default.fileExists(atPath: $0.path) }
+        guard !urls.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.writeObjects(urls as [NSURL])
+    }
+
+    /// Asks, then moves the recordings to the Trash.
+    func trash(_ ids: Set<String>) {
+        let items = Library.shared.items.filter { ids.contains($0.id) }
+        guard !items.isEmpty else { return }
+        let busy = items.filter { $0.status == .transcribing || $0.status == .writing }
+        let alert = NSAlert()
+        alert.messageText = items.count == 1 ? "Move “\(items[0].displayTitle)” to the Trash?" : "Move \(items.count) recordings to the Trash?"
+        alert.informativeText = "Their audio, transcripts and recaps go to the Trash; you can put them back from there."
+            + (busy.isEmpty ? "" : " \(busy.count == 1 ? "One is" : "\(busy.count) are") being recapped right now and will stay.")
+        alert.addButton(withTitle: "Move to Trash")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons[0].hasDestructiveAction = true
+        let done: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            guard response == .alertFirstButtonReturn, let self else { return }
+            let moved = Library.shared.trash(ids)
+            self.marked.subtract(moved)
+            if let selected = self.selected, moved.contains(selected) { self.selected = nil }
+        }
+        if let window { alert.beginSheetModal(for: window, completionHandler: done) } else { done(alert.runModal()) }
+    }
 
     func show(recording: String? = nil, page: Page = .recordings, rename: Bool = false) {
         self.page = page
@@ -41,12 +98,14 @@ final class MainWindow: ObservableObject {
             ("recap", { self.page = .recordings; self.selected = first; self.tab = .recap }),
             ("transcript", { self.page = .recordings; self.selected = first; self.tab = .transcript }),
             ("settings", { self.page = .settings; self.tab = .recap }),
+            ("selection", { self.page = .recordings; self.marked = Set(Library.shared.items.prefix(3).map(\.id)) }),
         ]
         Task { @MainActor in
             for appearance in [NSAppearance.Name.aqua, .darkAqua] {
                 window?.appearance = NSAppearance(named: appearance)
                 let suffix = appearance == .aqua ? "" : "-dark"
                 for (name, step) in steps {
+                    marked = []
                     step()
                     try? await Task.sleep(for: .seconds(1.2))
                     if let view = window?.contentView { Snapshot.write(view, to: folder.appendingPathComponent("\(name)\(suffix).png")) }
@@ -54,6 +113,7 @@ final class MainWindow: ObservableObject {
             }
             window?.appearance = nil
             page = .recordings
+            marked = []
             Onboarding.snapshot(to: folder)
             Toast.snapshots(to: folder)
             NotchBar.snapshots(to: folder)
@@ -183,7 +243,16 @@ private struct TitleBar: View {
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     Text(Counter.text(context.date.timeIntervalSince(started))).font(Theme.mono(12.5, .medium)).foregroundStyle(Theme.ink)
                 }
-                Text(recorder.isMuted ? "Muted: your mic is left out" : "Recording").font(Theme.sans(12.5, .medium)).foregroundStyle(Theme.ink2)
+                if recorder.blindToMute {
+                    Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 11)).foregroundStyle(Theme.working)
+                    Button { main.show(page: .settings) } label: {
+                        Text("Can't see your mute button").font(Theme.sans(12.5, .medium)).foregroundStyle(Theme.working)
+                    }
+                    .buttonStyle(.plainPointer)
+                    .help("Allow Accessibility in Settings, or your mic is recorded even while you're muted")
+                } else {
+                    Text(recorder.isMuted ? "Muted: your mic is left out" : "Recording").font(Theme.sans(12.5, .medium)).foregroundStyle(Theme.ink2)
+                }
             } else if !settings.hasKeys {
                 Image(systemName: "key").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.working)
                 Button { main.page = .settings } label: {

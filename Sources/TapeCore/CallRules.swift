@@ -95,6 +95,47 @@ public enum CallRules {
         return nil
     }
 
+    /// The meeting's own title from a call window's title, when it has one: "Meet – Weekly sync - Google
+    /// Chrome" → "Weekly sync", "Pricing review | Microsoft Teams" → "Pricing review". Nil for a title that
+    /// only names the app or a meeting code ("Meet - abc-defg-hij", "Zoom Meeting").
+    public static func meetingTitle(fromWindowTitle raw: String) -> String? {
+        var title = raw.trimmingCharacters(in: .whitespaces)
+        // What browsers add: their name, the profile, and Chrome's "Camera or microphone recording" marks.
+        let browsers = ["google chrome", "chrome", "opera", "opera gx", "mozilla firefox", "firefox", "microsoft edge", "edge",
+                        "brave", "arc", "safari", "vivaldi", "chromium", "zen"]
+        let marks = ["camera or microphone recording", "camera recording", "microphone recording", "audio playing", "audio muted"]
+        // Split at spaced dashes only (" - ", " – "), never inside a word ("AI-Powered").
+        var parts = title.replacingOccurrences(of: #"\s+[-–—]\s+"#, with: "\u{1}", options: .regularExpression)
+            .components(separatedBy: "\u{1}").map { $0.trimmingCharacters(in: .whitespaces) }
+        if parts.count > 1 {
+            // Drop trailing parts that are a browser, a profile ("Work") after a browser, or a mark.
+            var cut = parts.count
+            for (i, part) in parts.enumerated().reversed() where i > 0 {
+                let p = part.lowercased()
+                if browsers.contains(p) || marks.contains(p) || (i < parts.count - 1 && browsers.contains(parts[i - 1].lowercased())) || p.hasSuffix(" profile") {
+                    cut = i
+                } else if i < cut - 1 { break }
+            }
+            parts = Array(parts.prefix(cut))
+            title = parts.joined(separator: " - ")
+        }
+        var name: String?
+        if parts.count > 1, parts[0].lowercased() == "meet" {
+            name = parts.dropFirst().joined(separator: " - ")
+        } else if let range = title.range(of: " | Microsoft Teams", options: .caseInsensitive) {
+            name = String(title[..<range.lowerBound]).components(separatedBy: " | ").first
+            name = name?.replacingOccurrences(of: #"\s*\((Meeting|Call)\)$"#, with: "", options: .regularExpression)
+        }
+        guard var found = name?.trimmingCharacters(in: .whitespaces), !found.isEmpty else { return nil }
+        found = found.replacingOccurrences(of: #"^Meeting in "?|"$"#, with: "", options: .regularExpression)
+        let generic: Set<String> = ["meet", "meeting", "call", "calendar", "chat", "teams", "microsoft teams", "activity", "new meeting", "zoom meeting"]
+        // A Meet code (abc-defg-hij, the separators possibly turned into spaces) isn't a title.
+        let code = found.replacingOccurrences(of: " - ", with: "-")
+        guard !generic.contains(found.lowercased()), code.range(of: #"^[a-z]{3,4}-[a-z]{4}-[a-z]{3}$"#, options: .regularExpression) == nil
+        else { return nil }
+        return found
+    }
+
     /// The mute state from a call app's labels. Zoom's and Google Meet's own wording comes first; a button that
     /// starts with "Unmute" / "Mute" (Teams) is the fallback, as "Mute" buttons next to other people (Zoom's
     /// participant list) would otherwise mislead.

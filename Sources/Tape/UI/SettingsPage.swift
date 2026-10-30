@@ -30,6 +30,8 @@ final class SettingsModel: ObservableObject {
     @Published private(set) var hasKeys = APIKeys.complete
     @Published var askOnCalls = Settings.askOnCalls { didSet { Settings.askOnCalls = askOnCalls } }
     @Published var autoRecord = Settings.autoRecord { didSet { Settings.autoRecord = autoRecord } }
+    @Published var autoRecap = Settings.autoRecap { didSet { Settings.autoRecap = autoRecap } }
+    @Published var chime = Settings.chime { didSet { Settings.chime = chime } }
     @Published var appearance = Appearance.current {
         didSet {
             Appearance.current = appearance
@@ -64,7 +66,12 @@ struct SettingsPage: View {
             section("Recaps") {
                 SettingsCard {
                     KeyRow(service: .gemini, detail: "Listens to the call and writes the transcript, Khmer and English as spoken (Gemini 3.8 Flash).")
-                    KeyRow(service: .anthropic, detail: "Writes the recap from the transcript (Claude Opus 5.5).", last: true)
+                    KeyRow(service: .anthropic, detail: "Writes the recap from the transcript (Claude Opus 5.5).")
+                    SettingsRow(title: "Make recaps automatically",
+                                detail: "Off: a recording waits until you press Make recap, so credits are only used for the calls you want recapped.",
+                                last: true) {
+                        Toggle("Make recaps automatically", isOn: $settings.autoRecap).toggleStyle(.switch).labelsHidden()
+                    }
                 }
                 Text("Keys stay in your Mac's Keychain. Recordings are sent to Google and Anthropic only to make their transcript and recap.")
                     .font(Theme.sans(12.5)).foregroundStyle(Theme.ink3)
@@ -76,6 +83,10 @@ struct SettingsPage: View {
                     SettingsRow(title: "Ask to record when a call starts",
                                 detail: "Zoom, Teams, Meet and other browser calls, FaceTime, Slack, WhatsApp, Telegram…") {
                         Toggle("Ask to record when a call starts", isOn: $settings.askOnCalls).toggleStyle(.switch).labelsHidden()
+                    }
+                    SettingsRow(title: "Play a sound when a call starts", detail: "A quiet tap as \"Meeting detected\" appears.") {
+                        Toggle("Play a sound when a call starts", isOn: $settings.chime).toggleStyle(.switch).labelsHidden()
+                            .disabled(!settings.askOnCalls)
                     }
                     SettingsRow(title: "Record calls without asking", detail: "Starts recording as soon as a call starts.") {
                         Toggle("Record calls without asking", isOn: $settings.autoRecord).toggleStyle(.switch).labelsHidden()

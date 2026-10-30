@@ -145,7 +145,7 @@ final class Library: ObservableObject {
             let duration = (try? await asset.load(.duration)).map(\.seconds).flatMap { $0.isFinite ? $0 : nil } ?? 0
             let created = (try? source.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? Date()
             let item = RecordingItem(id: destination.deletingPathExtension().lastPathComponent, audioFile: destination.lastPathComponent,
-                                     created: created, duration: duration, app: nil, status: .queued)
+                                     created: created, duration: duration, app: nil, status: .notProcessed)
             items.append(item)
             items.sort { $0.created > $1.created }
             save()
@@ -184,6 +184,29 @@ final class Library: ObservableObject {
             export.exportAsynchronously { done.resume() }
         }
         guard export.status == .completed else { throw export.error ?? CocoaError(.fileWriteUnknown) }
+    }
+
+    // MARK: - Deleting
+
+    /// Moves recordings to the Trash with their transcripts and recaps (Finder's Put Back restores them).
+    /// One being transcribed or recapped right now is left alone. Returns the ids moved.
+    @discardableResult
+    func trash(_ ids: Set<String>) -> Set<String> {
+        var moved: Set<String> = []
+        for item in items where ids.contains(item.id) && item.status != .transcribing && item.status != .writing {
+            for url in [audioURL(item), transcriptURL(item), recapURL(item)] where FileManager.default.fileExists(atPath: url.path) {
+                do {
+                    try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+                } catch {
+                    log.error("Couldn't move \(url.lastPathComponent, privacy: .public) to the Trash: \(error.localizedDescription, privacy: .public)")
+                }
+            }
+            if !FileManager.default.fileExists(atPath: audioURL(item).path) { moved.insert(item.id) }
+        }
+        items.removeAll { moved.contains($0.id) }
+        save()
+        log.notice("Moved \(moved.count) recording(s) to the Trash")
+        return moved
     }
 
     // MARK: - Renaming
@@ -243,7 +266,7 @@ final class Library: ObservableObject {
     func add(audio url: URL, app: String?, duration: Double) -> RecordingItem {
         let id = url.deletingPathExtension().lastPathComponent
         let item = RecordingItem(id: id, audioFile: url.lastPathComponent, created: Date().addingTimeInterval(-duration),
-                                 duration: duration, app: app, status: .queued)
+                                 duration: duration, app: app, status: .notProcessed)
         items.removeAll { $0.id == id }
         items.insert(item, at: 0)
         save()

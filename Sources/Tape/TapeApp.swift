@@ -24,6 +24,17 @@ enum Settings {
         get { UserDefaults.standard.object(forKey: "askOnCalls") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "askOnCalls") }
     }
+    /// Make each recording's recap as soon as it's saved or imported. Off: a recap is made when asked for
+    /// (each one uses the Gemini and Anthropic credits of your keys).
+    static var autoRecap: Bool {
+        get { UserDefaults.standard.bool(forKey: "autoRecap") }
+        set { UserDefaults.standard.set(newValue, forKey: "autoRecap") }
+    }
+    /// A short, quiet sound when a call starts and Tape asks to record it.
+    static var chime: Bool {
+        get { UserDefaults.standard.object(forKey: "chime") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "chime") }
+    }
     /// Start recording without asking.
     static var autoRecord: Bool {
         get { UserDefaults.standard.bool(forKey: "autoRecord") }
@@ -113,6 +124,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             } else {
                 MainWindow.shared.show()
                 await askForUndecidedPermissions()
+                PermissionPrompt.shared.start()
             }
             watcher.start()
             Processor.shared.resume()
@@ -197,7 +209,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             recorder.start(call: call, followsCall: true)
             return
         }
-        // As in Onword: "Meeting detected", what it is, and one button.
+        // "Meeting detected": it stays (with a glow, and a sound) until it's answered or the call ends, so a call
+        // isn't left unrecorded because the card went by unseen.
+        if Settings.chime { Self.chime?.play() }
         Toast.shared.show(.init(
             id: "call", symbol: "video", title: "Meeting detected", message: call.name,
             primary: .init(title: "Record", symbol: "record.circle") { [weak self] in
@@ -205,8 +219,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self.recorder.start(call: self.watcher.current ?? call, followsCall: true)
             },
             secondary: .init(title: "Not now") {},
-            timeout: 30))
+            timeout: nil, attention: true))
     }
+
+    /// Quiet: a notice, not an alarm.
+    private static let chime: NSSound? = {
+        let sound = NSSound(named: "Tink")
+        sound?.volume = 0.35
+        return sound
+    }()
 
     private func callEnded(_ call: CallWatcher.Call, lastSeen: Double) {
         Toast.shared.dismiss("call")

@@ -6,12 +6,20 @@ import SwiftUI
 /// a recording, import, open Tape, and the latest recording with its recap; while recording, the time, whether
 /// your mic is in, and Stop and save. While recording, a live strip hugs the notch all the time (a red dot and
 /// the timer on one side, your mic's level, or a crossed-out mic while you're muted, on the other), over
-/// full-screen calls too. Only on a screen with a notch; elsewhere the menu bar icon has the same actions.
+/// full-screen calls too. Drag recordings (audio or video) to the notch and it opens as a drop zone: drop them
+/// to import them and make their recaps. Only on a screen with a notch; elsewhere the menu bar icon has the
+/// same actions.
 @MainActor
 final class NotchBar: ObservableObject {
     static let shared = NotchBar()
 
     @Published private(set) var open = false
+    /// Files are being dragged to the notch: it shows where to drop them.
+    @Published private(set) var dropping = false
+    /// The pointer with the files is over the open drop zone.
+    @Published var dropTargeted = false
+    /// The drag pasteboard's count when no button was held: a new count with the button down is a drag.
+    private var dragCount = NSPasteboard(name: .drag).changeCount
     @Published private(set) var notch: CGSize = .zero
     private var panel: NSPanel?
     private var screen: NSScreen?
@@ -21,6 +29,8 @@ final class NotchBar: ObservableObject {
 
     /// How far the live strip reaches out on each side of the notch while recording.
     static let wing: CGFloat = 68
+    /// Wider, for "Not recording" beside the notch.
+    static let callWing: CGFloat = 104
     static let openWidth: CGFloat = 460
 
     func start() {
@@ -69,7 +79,8 @@ final class NotchBar: ObservableObject {
     private func followMouse() {
         guard let screen, panel != nil else { return }
         let mouse = NSEvent.mouseLocation
-        let width = open ? Self.openWidth : notch.width + (Recorder.shared.isRecording ? 2 * Self.wing : 0)
+        if followDrag(mouse, on: screen) { return }
+        let width = open ? Self.openWidth : notch.width + 2 * Self.closedWing
         let height = open ? notch.height + (Recorder.shared.isRecording ? 170 : 236) : notch.height
         let area = NSRect(x: screen.frame.midX - width / 2 - 4, y: screen.frame.maxY - height - 4, width: width + 8, height: height + 4)
         let inside = area.contains(mouse)
@@ -92,12 +103,59 @@ final class NotchBar: ObservableObject {
             ("notch-recording-open", .init(open: true, recording: true, muted: true)),
             ("notch-recording", .init(open: false, recording: true, muted: false)),
             ("notch-recording-muted", .init(open: false, recording: true, muted: true)),
+            ("notch-drop", .init(open: true, recording: false, muted: false, dropping: true)),
+            ("notch-unrecorded", .init(open: false, recording: false, muted: false, call: true)),
         ]
         for (name, preview) in states {
             let view = NSHostingView(rootView: NotchView(preview: preview, previewNotch: notch).background(Color(hex: 0xC9C9C9)))
             view.frame = NSRect(x: 0, y: 0, width: openWidth + 40, height: preview.open ? notch.height + 250 : notch.height + 30)
             Snapshot.write(view, to: folder.appendingPathComponent("\(name).png"))
         }
+    }
+
+    /// Files dragged near the notch open it as a drop zone; it closes again if they're taken elsewhere.
+    /// Returns true while that's what's happening.
+    private func followDrag(_ mouse: NSPoint, on screen: NSScreen) -> Bool {
+        let pasteboard = NSPasteboard(name: .drag)
+        guard NSEvent.pressedMouseButtons & 1 != 0 else {
+            dragCount = pasteboard.changeCount
+            if dropping { endDrop() }
+            return false
+        }
+        guard pasteboard.changeCount != dragCount,
+              pasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) else { return false }
+        // Near the notch: across the open island's width, and the top 70 points (more once it's open).
+        let near = NSRect(x: screen.frame.midX - Self.openWidth / 2, y: screen.frame.maxY - (dropping ? notch.height + 160 : 70),
+                          width: Self.openWidth, height: dropping ? notch.height + 160 : 70)
+        if near.contains(mouse), !dropping, !Toast.shared.isShowing {
+            withAnimation(Toast.spring(0.4, 0.8)) { dropping = true; open = true }
+        } else if !near.contains(mouse), dropping {
+            endDrop()
+        }
+        return dropping
+    }
+
+    private func endDrop() {
+        withAnimation(Toast.spring(0.32, 0.9)) { dropping = false; dropTargeted = false; open = false }
+    }
+
+    /// Files dropped on the notch: imported, and recapped.
+    func dropped(_ providers: [NSItemProvider]) {
+        endDrop()
+        Task {
+            var urls: [URL] = []
+            for provider in providers {
+                if let data = try? await provider.loadItem(forTypeIdentifier: "public.file-url") as? Data,
+                   let url = URL(dataRepresentation: data, relativeTo: nil) { urls.append(url) }
+            }
+            Importer.importFiles(urls, from: .notch)
+        }
+    }
+
+    /// How far the closed notch reaches out on each side: the live strip while recording, "Not recording"
+    /// while a call goes unrecorded, nothing otherwise.
+    static var closedWing: CGFloat {
+        Recorder.shared.isRecording ? wing : CallWatcher.shared.current != nil ? callWing : 0
     }
 
     func close() {
@@ -112,6 +170,8 @@ private struct NotchView: View {
         let open: Bool
         let recording: Bool
         let muted: Bool
+        var dropping = false
+        var call = false
     }
     var preview: Preview?
     var previewNotch: CGSize?
@@ -125,30 +185,43 @@ private struct NotchView: View {
     private var recording: Bool { preview?.recording ?? recorder.isRecording }
     private var muted: Bool { preview?.muted ?? recorder.isMuted }
     private var notch: CGSize { previewNotch ?? bar.notch }
+    private var dropping: Bool { preview?.dropping ?? bar.dropping }
+    /// On a call that isn't being recorded.
+    private var unrecorded: Bool { !recording && (preview?.call ?? (calls.current != nil)) }
+    private var callApp: String { preview != nil ? "Google Meet" : (calls.current?.name).map(Self.shortApp) ?? "" }
+    private static func shortApp(_ name: String) -> String { name.range(of: " in ").map { String(name[..<$0.lowerBound]) } ?? name }
     private var started: Date { preview != nil ? Date().addingTimeInterval(-768) : recorder.startedAt ?? Date() }
 
     var body: some View {
-        let width = open ? NotchBar.openWidth : notch.width + (recording ? 2 * NotchBar.wing : 0)
+        let width = open ? NotchBar.openWidth
+            : notch.width + 2 * (recording ? NotchBar.wing : unrecorded ? NotchBar.callWing : 0)
         VStack(spacing: 0) {
             ZStack(alignment: .top) {
                 if open {
-                    Group { if recording { recordingPanel } else { quickActions } }
+                    Group { if dropping { dropZone } else if recording { recordingPanel } else { quickActions } }
                         .padding(.top, notch.height + 10)
                         .padding(.horizontal, 22).padding(.bottom, 18)
                         .transition(.opacity)
                 } else if recording {
                     live.frame(height: notch.height)
+                } else if unrecorded {
+                    notRecording.frame(height: notch.height)
                 }
             }
             .frame(width: width, height: open ? nil : notch.height, alignment: .top)
             .background(IslandShape(flare: 8, radius: open ? 26 : 12).fill(Color.black))
             .clipShape(IslandShape(flare: 8, radius: open ? 26 : 12))
             .shadow(color: .black.opacity(open ? 0.35 : 0), radius: 18, y: 8)
+            .onDrop(of: [.fileURL], isTargeted: Binding(get: { bar.dropTargeted }, set: { bar.dropTargeted = $0 })) { providers in
+                bar.dropped(providers)
+                return true
+            }
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity)
         .environment(\.colorScheme, .dark)
         .animation(Toast.spring(0.4, 0.82), value: recording)
+        .animation(Toast.spring(0.4, 0.82), value: unrecorded)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Tape")
     }
@@ -165,7 +238,9 @@ private struct NotchView: View {
             .frame(width: NotchBar.wing - 16, alignment: .leading)
             Spacer(minLength: notch.width)
             Group {
-                if muted {
+                if preview == nil && recorder.blindToMute {
+                    Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 12, weight: .semibold)).foregroundStyle(Color(hex: 0xFBBF24))
+                } else if muted {
                     Image(systemName: "mic.slash.fill").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.Island.text2)
                 } else {
                     LevelBars()
@@ -175,7 +250,26 @@ private struct NotchView: View {
         }
         .padding(.horizontal, 16)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(muted ? "Recording, muted in the call: your mic is left out" : "Recording")
+        .accessibilityLabel(preview == nil && recorder.blindToMute ? "Recording. Tape can't see your mute button: your mic is always recorded"
+                            : muted ? "Recording, muted in the call: your mic is left out" : "Recording")
+    }
+
+    /// On a call that isn't recorded: a hollow dot and "Not recording" left of the notch, the call's app right
+    /// of it. Hover to record.
+    private var notRecording: some View {
+        HStack(spacing: 0) {
+            HStack(spacing: 6) {
+                Circle().strokeBorder(Theme.Island.text, lineWidth: 1.5).frame(width: 8, height: 8)
+                Text("Not recording").font(Theme.sans(11, .semibold)).foregroundStyle(Theme.Island.text).lineLimit(1).fixedSize()
+            }
+            .frame(width: NotchBar.callWing - 16, alignment: .leading)
+            Spacer(minLength: notch.width)
+            Text(callApp).font(Theme.sans(11, .medium)).foregroundStyle(Theme.Island.text2).lineLimit(1)
+                .frame(width: NotchBar.callWing - 16, alignment: .trailing)
+        }
+        .padding(.horizontal, 16)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("On a call in \(callApp), not recording. Hover over the notch to record.")
     }
 
     private var clock: some View {
@@ -252,6 +346,25 @@ private struct NotchView: View {
         .buttonStyle(.plainPointer)
     }
 
+    // MARK: Open, files being dragged to it
+
+    private var dropZone: some View {
+        let targeted = preview == nil && bar.dropTargeted
+        return VStack(spacing: 8) {
+            Image(systemName: "square.and.arrow.down").font(.system(size: 22, weight: .medium))
+                .offset(y: targeted ? 2 : 0)
+            Text("Drop to make recaps").font(Theme.sans(14, .semibold))
+            Text("Audio or video, any length").font(Theme.sans(12)).foregroundStyle(Theme.Island.text2)
+        }
+        .foregroundStyle(Theme.Island.text)
+        .frame(width: NotchBar.openWidth - 44, height: 124)
+        .background(RoundedRectangle(cornerRadius: 16).fill(Color.white.opacity(targeted ? 0.12 : 0.05)))
+        .overlay(RoundedRectangle(cornerRadius: 16)
+            .strokeBorder(Color.white.opacity(targeted ? 0.9 : 0.35), style: StrokeStyle(lineWidth: 1.5, dash: targeted ? [] : [6, 5])))
+        .animation(.easeOut(duration: 0.15), value: targeted)
+        .accessibilityElement(children: .combine)
+    }
+
     // MARK: Open, recording
 
     private var recordingPanel: some View {
@@ -267,9 +380,22 @@ private struct NotchView: View {
                 clock.font(Theme.mono(26, .medium)).foregroundStyle(Theme.Island.text)
             }
             HStack(spacing: 8) {
-                Image(systemName: muted ? "mic.slash" : "mic").font(.system(size: 13, weight: .medium))
-                Text(muted ? "You're muted in the call, so your mic is left out." : "Your mic is in. Mute in the call to leave it out.")
-                    .font(Theme.sans(12.5))
+                if preview == nil && recorder.blindToMute {
+                    Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 13, weight: .medium)).foregroundStyle(Color(hex: 0xFBBF24))
+                    Text("Tape can't see your mute button, so your mic is always recorded.").font(Theme.sans(12.5))
+                    Spacer(minLength: 4)
+                    Button("Allow") {
+                        Permissions.requestAccessibility()
+                        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+                    }
+                    .buttonStyle(.plainPointer)
+                    .font(Theme.sans(12.5, .semibold)).foregroundStyle(.white)
+                    .accessibilityLabel("Allow Accessibility")
+                } else {
+                    Image(systemName: muted ? "mic.slash" : "mic").font(.system(size: 13, weight: .medium))
+                    Text(muted ? "You're muted in the call, so your mic is left out." : "Your mic is in. Mute in the call to leave it out.")
+                        .font(Theme.sans(12.5))
+                }
             }
             .foregroundStyle(Color(hex: 0xC4C4C4))
             .padding(.horizontal, 12).frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
