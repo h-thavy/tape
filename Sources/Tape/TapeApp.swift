@@ -89,6 +89,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             return
         }
+        // Test hook: TAPE_TEST_ISLAND=<seconds> shows "Meeting detected" for that long and quits, touching
+        // nothing (for checking what screen sharing sees).
+        if let seconds = ProcessInfo.processInfo.environment["TAPE_TEST_ISLAND"].flatMap(Double.init) {
+            Toast.shared.show(.init(id: "call", symbol: "video", title: "Meeting detected", message: "Google Meet in Opera GX",
+                                    primary: .init(title: "Record", symbol: "record.circle") {}, secondary: .init(title: "Not now") {},
+                                    timeout: nil, attention: true))
+            DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { NSApp.terminate(nil) }
+            return
+        }
         // Debug: TAPE_SNAPSHOT draws the pages and quits, touching nothing (another Tape may be recording).
         if ProcessInfo.processInfo.environment["TAPE_SNAPSHOT"] != nil {
             MainWindow.shared.show()

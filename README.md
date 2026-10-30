@@ -32,7 +32,8 @@ curl -fsSL https://raw.githubusercontent.com/h-thavy/tape/main/scripts/install.s
   calls; on a Mac without a notch it drops from the top edge). Or turn on *Record calls without asking*.
 - **Lives in the notch.** Hover over the notch for quick actions: record, import, open Tape, the latest
   recording. While recording, the notch shows the time and your mic's level (a crossed-out mic while you're
-  muted). Drag recordings to the notch to import them.
+  muted). Drag recordings to the notch to import them. The island stays off screen shares and screen
+  recordings: people you share your whole screen with don't see it.
 - **Stops when the call ends.** The recording is encoded while you talk, so it's saved the moment the call
   ends, trimmed to where the call left the microphone.
 - **Writes the recap when you ask.** Press *Make recap* on a recording (or on the "Recording saved" card, or

@@ -72,6 +72,7 @@ final class NotchBar: ObservableObject {
         panel.hidesOnDeactivate = false
         panel.becomesKeyOnlyIfNeeded = true
         panel.contentView = FirstClickHostingView(rootView: NotchView())
+        panel.sharingType = Toast.captureSharing
         return panel
     }
 

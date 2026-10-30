@@ -26,7 +26,7 @@ final class Toast {
         var primary: Action?
         var secondary: Action?
         var timeout: TimeInterval? = 8
-        /// Something to answer: the island glows as it opens.
+        /// Something to answer: light runs around the island's edge while it waits.
         var attention = false
         /// Called when the card goes away without a button being used (closed, or timed out).
         var onDismiss: (() -> Void)?
@@ -48,6 +48,11 @@ final class Toast {
     private var hideWork: DispatchWorkItem?
 
     static var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+
+    /// The island is yours, not the meeting's: kept out of screen sharing and screen recording, so it isn't
+    /// seen when you share your whole screen. (TAPE_TEST_SHARED=1 leaves it in, to compare.)
+    static let captureSharing: NSWindow.SharingType =
+        ProcessInfo.processInfo.environment["TAPE_TEST_SHARED"] != nil ? .readOnly : .none
     static func spring(_ response: Double, _ damping: Double) -> Animation {
         reduceMotion ? .easeOut(duration: 0.15) : .spring(response: response, dampingFraction: damping)
     }
@@ -76,6 +81,7 @@ final class Toast {
         panel.hidesOnDeactivate = false
         panel.becomesKeyOnlyIfNeeded = true
         panel.contentView = view
+        panel.sharingType = Toast.captureSharing
         // Its top on the screen's top edge, centred on the notch.
         panel.setFrameOrigin(NSPoint(x: (screen.frame.midX - size.width / 2).rounded(), y: screen.frame.maxY - size.height))
         panel.orderFrontRegardless()
@@ -131,16 +137,21 @@ final class Toast {
     static func snapshots(to folder: URL) {
         let cards: [(String, Card)] = [
             ("island-meeting", Card(id: "call", symbol: "video", title: "Meeting detected", message: "Google Meet in Opera GX",
-                                    primary: .init(title: "Record", symbol: "record.circle") {}, secondary: .init(title: "Not now") {})),
+                                    primary: .init(title: "Record", symbol: "record.circle") {}, secondary: .init(title: "Not now") {},
+                                    timeout: nil, attention: true)),
             ("island-saved", Card(id: "saved", symbol: "checkmark.circle", title: "Recording saved", detail: "42:10",
                                   message: "Weekly sync with Ploy HR", primary: .init(title: "Make recap", symbol: "sparkles") {},
                                   secondary: .init(title: "Open") {})),
             ("island-recap", Card(id: "recap", symbol: "doc.text", title: "Recap ready", message: "AI-Powered CV Automation · 6 topics",
                                   primary: .init(title: "Open") {})),
         ]
-        for (name, card) in cards {
-            let view = NSHostingView(rootView: IslandView(card: card, notch: CGSize(width: 185, height: 32), model: Model(open: true)) { _ in }
-                .background(Color(hex: 0xC9C9C9)))
+        let meeting = cards[0].1
+        let glows: [(String, Card, Double?)] = cards.map { ($0.0, $0.1, nil) }
+            + [0.15, 0.35, 0.55, 0.75, 0.95, 1.1, 1.25].enumerated().map { ("island-glow-\($0.offset + 1)", meeting, $0.element) }
+        for (name, card, glowAt) in glows {
+            var island = IslandView(card: card, notch: CGSize(width: 185, height: 32), model: Model(open: true)) { _ in }
+            island.glowAt = glowAt
+            let view = NSHostingView(rootView: island.background(Color(hex: 0x2A2A2E)))
             view.frame = NSRect(origin: .zero, size: openSize(card, notch: CGSize(width: 185, height: 32)))
             Snapshot.write(view, to: folder.appendingPathComponent("\(name).png"))
         }
@@ -165,6 +176,8 @@ final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
 struct IslandShape: Shape {
     var flare: CGFloat = 8
     var radius: CGFloat = 24
+    /// Without the top edge (for drawing an outline that stops at the screen's edge).
+    var open = false
 
     func path(in rect: CGRect) -> Path {
         let f = min(flare, rect.width / 4), r = min(radius, rect.height / 2, (rect.width - 2 * f) / 2)
@@ -177,8 +190,94 @@ struct IslandShape: Shape {
         p.addQuadCurve(to: CGPoint(x: rect.maxX - f, y: rect.maxY - r), control: CGPoint(x: rect.maxX - f, y: rect.maxY))
         p.addLine(to: CGPoint(x: rect.maxX - f, y: rect.minY + f))
         p.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.minY), control: CGPoint(x: rect.maxX - f, y: rect.minY))
-        p.closeSubpath()
+        if !open { p.closeSubpath() }
         return p
+    }
+}
+
+/// White light running down the island's edge: two streaks start at the top corners, where the island meets
+/// the screen's edge, run down the sides and along the bottom, and meet in the middle with a soft flash.
+/// Every few seconds while the island waits for an answer, the first run brightest. A faint still rim under
+/// Reduce Motion.
+private struct AttentionGlow: View {
+    let start: Date
+    var frozen = false
+
+    /// One run and its flash, then a pause.
+    private static let cycle = 2.8, run = 1.1, flash = 0.5
+
+    var body: some View {
+        if Toast.reduceMotion {
+            IslandShape(open: true).stroke(Color.white.opacity(0.35), lineWidth: 1).allowsHitTesting(false).accessibilityHidden(true)
+        } else {
+            TimelineView(.animation(paused: frozen)) { context in
+                let t = max(0, context.date.timeIntervalSince(start))
+                let local = t.truncatingRemainder(dividingBy: Self.cycle)
+                let strength = t < Self.cycle ? 1 : 0.6
+                // Eased in and out: gathering speed from the corners, slowing as the two meet.
+                let x = min(local / Self.run, 1)
+                let head = x * x * (3 - 2 * x)
+                let flash = local > Self.run ? max(0, 1 - (local - Self.run) / Self.flash) : 0
+                ZStack {
+                    if local < Self.run + 0.25 {
+                        streak(.left, head: head, strength: strength * (local < Self.run ? 1 : 1 - (local - Self.run) / 0.25))
+                        streak(.right, head: head, strength: strength * (local < Self.run ? 1 : 1 - (local - Self.run) / 0.25))
+                    }
+                    if flash > 0 { meeting(flash: flash * strength) }
+                }
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
+        }
+    }
+
+    /// A streak with a smoothly fading tail: the tail in 12 short pieces, each brighter towards the head.
+    private func streak(_ side: IslandHalf.Side, head: Double, strength: Double) -> some View {
+        let tail = 0.32, pieces = 12
+        return ZStack {
+            ForEach(0..<pieces, id: \.self) { k in
+                let from = head - tail * Double(pieces - k) / Double(pieces)
+                let to = head - tail * Double(pieces - k - 1) / Double(pieces)
+                IslandHalf(side: side).trim(from: max(0, from), to: max(0, to))
+                    .stroke(Color.white, style: StrokeStyle(lineWidth: 1.6, lineCap: .butt))
+                    .opacity(pow(Double(k + 1) / Double(pieces), 1.6) * strength)
+            }
+            IslandHalf(side: side).trim(from: max(0, head - 0.12), to: head)
+                .stroke(Color.white, style: StrokeStyle(lineWidth: 6, lineCap: .round))
+                .blur(radius: 6).opacity(0.5 * strength)
+        }
+    }
+
+    /// Where the two streaks meet: a short glow on the bottom edge.
+    private func meeting(flash: Double) -> some View {
+        GeometryReader { geometry in
+            Capsule().fill(Color.white)
+                .frame(width: 40 + 90 * (1 - flash), height: 3)
+                .blur(radius: 4 + 4 * (1 - flash))
+                .position(x: geometry.size.width / 2, y: geometry.size.height - 0.5)
+                .opacity(0.9 * flash)
+        }
+    }
+}
+
+/// One half of the island's outline without its top edge: from a top corner down the side and along the
+/// bottom to the middle.
+private struct IslandHalf: Shape {
+    enum Side { case left, right }
+    let side: Side
+    var flare: CGFloat = 8
+    var radius: CGFloat = 24
+
+    func path(in rect: CGRect) -> Path {
+        let f = min(flare, rect.width / 4), r = min(radius, rect.height / 2, (rect.width - 2 * f) / 2)
+        var p = Path()
+        p.move(to: CGPoint(x: rect.minX, y: rect.minY))
+        p.addQuadCurve(to: CGPoint(x: rect.minX + f, y: rect.minY + f), control: CGPoint(x: rect.minX + f, y: rect.minY))
+        p.addLine(to: CGPoint(x: rect.minX + f, y: rect.maxY - r))
+        p.addQuadCurve(to: CGPoint(x: rect.minX + f + r, y: rect.maxY), control: CGPoint(x: rect.minX + f, y: rect.maxY))
+        p.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
+        guard side == .right else { return p }
+        return p.applying(CGAffineTransform(translationX: rect.maxX + rect.minX, y: 0).scaledBy(x: -1, y: 1))
     }
 }
 
@@ -211,7 +310,9 @@ private struct IslandView: View {
     let notch: CGSize?
     @ObservedObject var model: Toast.Model
     let done: (Toast.Action?) -> Void
-    @State private var glow = false
+    /// Debug snapshots: the glow as it is this many seconds after opening.
+    var glowAt: Double?
+    @State private var glowStart: Date?
 
     /// Below the notch (or the menu bar, where there's none).
     private var top: CGFloat { notch?.height ?? NSStatusBar.system.thickness }
@@ -231,17 +332,18 @@ private struct IslandView: View {
                 .background(IslandShape().fill(Color.black))
                 .clipShape(IslandShape())
                 .shadow(color: .black.opacity(model.open ? 0.35 : 0), radius: 18, y: 8)
-                // Two soft rings going out from the island.
                 .overlay {
-                    if card.attention && !Toast.reduceMotion {
-                        IslandShape().stroke(Color.white.opacity(glow ? 0 : 0.55), lineWidth: glow ? 6 : 2)
-                            .scaleEffect(glow ? 1.06 : 1, anchor: .top)
-                            .allowsHitTesting(false)
+                    if card.attention, model.open, glowStart != nil || glowAt != nil {
+                        AttentionGlow(start: glowStart ?? Date().addingTimeInterval(-(glowAt ?? 0)), frozen: glowAt != nil)
                     }
                 }
                 .onChange(of: model.open) {
-                    guard model.open, card.attention, !Toast.reduceMotion else { return }
-                    withAnimation(.easeOut(duration: 1.1).delay(0.35).repeatCount(2, autoreverses: false)) { glow = true }
+                    // Once the island has grown to full size.
+                    if model.open, card.attention {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { glowStart = Date() }
+                    } else {
+                        glowStart = nil
+                    }
                 }
             Spacer(minLength: 0)
         }
