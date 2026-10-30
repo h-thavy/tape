@@ -4,10 +4,21 @@
 #   scripts/build-app.sh                         # signs with your first "Apple Development" identity
 #   SIGN_IDENTITY=- scripts/build-app.sh         # ad-hoc (permissions reset on every rebuild)
 #
-# A real identity matters: macOS ties the microphone, system audio and Accessibility grants to the signature.
+# A real identity matters: macOS ties the microphone, system audio and Accessibility grants, and access to the
+# API keys in the Keychain, to the signature. So builds use the release certificate when it's here (the same
+# one as the installed app: no Keychain prompts when switching between the two), else Apple Development.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+SIGNING_DIR="${TAPE_SIGNING_DIR:-../onword-backups/signing}"
+if [[ -z "${SIGN_IDENTITY:-}" && -f "$SIGNING_DIR/onword-signing.keychain-db" && -f "$SIGNING_DIR/keychain-password.txt" ]]; then
+  KEYCHAIN="$(cd "$SIGNING_DIR" && pwd)/onword-signing.keychain-db"
+  security unlock-keychain -p "$(cat "$SIGNING_DIR/keychain-password.txt")" "$KEYCHAIN"
+  if ! security list-keychains -d user | grep -q "$KEYCHAIN"; then
+    security list-keychains -d user -s $(security list-keychains -d user | tr -d '"') "$KEYCHAIN"
+  fi
+  SIGN_IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" | awk '/"Onword Release"/ {print $2; exit}')"
+fi
 if [[ -z "${SIGN_IDENTITY:-}" ]]; then
   SIGN_IDENTITY="$(security find-identity -v -p codesigning \
     | awk -F'"' '/Apple Development|Developer ID Application/ { print $2; exit }')"

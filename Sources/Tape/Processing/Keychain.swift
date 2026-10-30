@@ -1,7 +1,10 @@
 import Foundation
 import Security
 
-/// The API keys, in the login Keychain (never in a file or the defaults).
+/// The API keys, in the login Keychain (never in a file or the defaults). Each key is read from the Keychain
+/// once per launch and kept in memory: macOS may ask before handing it over (when another build of Tape
+/// saved it), and the Settings page reads it every time it redraws.
+@MainActor
 enum APIKeys {
     enum Service: String, CaseIterable {
         case gemini, anthropic
@@ -15,8 +18,16 @@ enum APIKeys {
     }
 
     private static let keychainService = "io.github.h-thavy.tape"
+    private static var cache: [Service: String?] = [:]
 
     static func get(_ service: Service) -> String? {
+        if let cached = cache[service] { return cached }
+        let key = read(service)
+        cache[service] = key
+        return key
+    }
+
+    private static func read(_ service: Service) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: keychainService,
@@ -37,7 +48,9 @@ enum APIKeys {
             kSecAttrAccount as String: service.rawValue,
         ]
         SecItemDelete(base as CFDictionary)
-        guard let key = key?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty else { return }
+        let key = key?.trimmingCharacters(in: .whitespacesAndNewlines)
+        cache[service] = key?.isEmpty == false ? key : nil
+        guard let key, !key.isEmpty else { return }
         var item = base
         item[kSecValueData as String] = Data(key.utf8)
         item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
