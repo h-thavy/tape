@@ -164,8 +164,9 @@ enum TapeMark {
     }
 
     /// The menu bar icon: the cassette in the menu bar's own ink (it follows light and dark menu bars), with a
-    /// red dot while recording (grey while you're muted in the call).
-    static func menuBarImage(recording: Bool = false, muted: Bool = false) -> NSImage {
+    /// red dot while recording (grey while you're muted in the call), or a dot in the system's accent colour
+    /// when an update is ready.
+    static func menuBarImage(recording: Bool = false, muted: Bool = false, update: Bool = false) -> NSImage {
         let image = NSImage(size: NSSize(width: 26, height: 18), flipped: false) { rect in
             guard let cg = NSGraphicsContext.current?.cgContext else { return false }
             let m = shape(in: CGRect(x: rect.midX - 12.5, y: rect.midY - 13, width: 25, height: 25))
@@ -174,17 +175,19 @@ enum TapeMark {
             cg.fillPath(using: .evenOdd)
             cg.addPath(m.reels)
             cg.fillPath(using: .evenOdd)
-            if recording {
+            if recording || update {
                 let dot = CGRect(x: rect.maxX - 7, y: rect.maxY - 7, width: 7, height: 7)
-                cg.setFillColor(NSColor.windowBackgroundColor.cgColor)
-                cg.fillEllipse(in: dot.insetBy(dx: -1.2, dy: -1.2))
-                cg.setFillColor((muted ? NSColor.systemGray : NSColor.systemRed).cgColor)
+                // A gap around the dot, cut out of the cassette.
+                cg.setBlendMode(.clear)
+                cg.fillEllipse(in: dot.insetBy(dx: -1.5, dy: -1.5))
+                cg.setBlendMode(.normal)
+                cg.setFillColor((recording ? (muted ? NSColor.systemGray : NSColor.systemRed) : NSColor.controlAccentColor).cgColor)
                 cg.fillEllipse(in: dot)
             }
             return true
         }
         // Without a dot, a template: macOS tints it exactly like the other menu bar icons.
-        image.isTemplate = !recording
+        image.isTemplate = !recording && !update
         return image
     }
 }

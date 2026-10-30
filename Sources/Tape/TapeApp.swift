@@ -1,5 +1,6 @@
 import AVFoundation
 import AppKit
+import Combine
 import TapeCore
 import ServiceManagement
 import os
@@ -48,6 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let watcher = CallWatcher.shared
     private let recorder = Recorder.shared
     private var clock: Timer?
+    private var updates: AnyCancellable?
     private let log = Logger(subsystem: "io.github.h-thavy.tape", category: "app")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -59,6 +61,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.delegate = self
         item.menu = menu
         recorder.onChange = { [weak self] in self?.refresh() }
+        // A new version puts a dot on the icon; the menu then offers it first.
+        updates = UpdateChecker.shared.$state.receive(on: RunLoop.main).sink { [weak self] _ in
+            MainActor.assumeIsolated { self?.refresh() }
+        }
         refresh()
 
         watcher.onStart = { [weak self] call in self?.callStarted(call) }
@@ -256,8 +262,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else {
             clock?.invalidate()
             clock = nil
-            button.image = TapeMark.menuBarImage()
-            button.title = recorder.saving > 0 ? " Saving…" : ""
+            let update = UpdateChecker.shared.availableVersion
+            button.image = TapeMark.menuBarImage(update: update != nil)
+            switch UpdateChecker.shared.state {
+            case .downloading, .installing: button.title = " Updating…"
+            default: button.title = recorder.saving > 0 ? " Saving…" : ""
+            }
+            button.setAccessibilityLabel(update.map { "Tape, update to \($0) available" } ?? "Tape")
+            button.toolTip = update.map { "Tape \($0) is available: click to update" }
         }
     }
 
@@ -272,10 +284,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
-        menu.addItem(withTitle: "Open Tape", action: #selector(openWindow), keyEquivalent: "")
-        if let version = UpdateChecker.shared.availableVersion {
-            menu.addItem(withTitle: "Update to Tape \(version)…", action: #selector(update), keyEquivalent: "")
+        UpdateChecker.shared.checkIfStale()
+        // An update first, where the dot on the icon points.
+        switch UpdateChecker.shared.state {
+        case .available(let version):
+            let item = NSMenuItem(title: "Update to Tape \(version)", action: #selector(update), keyEquivalent: "")
+            item.image = NSImage(systemSymbolName: "arrow.down.circle.fill", accessibilityDescription: nil)
+            item.attributedTitle = NSAttributedString(string: "Update to Tape \(version)", attributes: [
+                .font: NSFont.menuFont(ofSize: 0).withWeight(.semibold),
+            ])
+            menu.addItem(item)
+            menu.addItem(disabled("Recordings, keys and settings stay"))
+            menu.addItem(withTitle: "What's new", action: #selector(whatsNew), keyEquivalent: "")
+            menu.addItem(.separator())
+        case .waiting(let version):
+            menu.addItem(disabled("Updates to \(version) when the recording or recap is done"))
+            menu.addItem(.separator())
+        case .downloading(let version, let progress):
+            menu.addItem(disabled("Downloading Tape \(version)… \(Int(progress * 100)) %"))
+            menu.addItem(.separator())
+        case .installing(let version):
+            menu.addItem(disabled("Installing Tape \(version); it reopens in a moment"))
+            menu.addItem(.separator())
+        default:
+            break
         }
+        menu.addItem(withTitle: "Open Tape", action: #selector(openWindow), keyEquivalent: "")
         menu.addItem(.separator())
         if recorder.isRecording {
             menu.addItem(withTitle: "Stop and save", action: #selector(toggleRecording), keyEquivalent: "")
@@ -323,6 +357,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func openWindow() { MainWindow.shared.show() }
     @objc private func update() { UpdateChecker.shared.update() }
+    @objc private func whatsNew() { UpdateChecker.shared.openRelease() }
     @objc private func toggleAsk() { SettingsModel.shared.askOnCalls.toggle() }
     @objc private func toggleAuto() { SettingsModel.shared.autoRecord.toggle() }
     @objc private func toggleLogin() { SettingsModel.shared.openAtLogin.toggle() }
@@ -352,5 +387,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else {
             NSApp.terminate(nil)
         }
+    }
+}
+
+extension NSFont {
+    func withWeight(_ weight: NSFont.Weight) -> NSFont {
+        NSFont.systemFont(ofSize: pointSize, weight: weight)
     }
 }

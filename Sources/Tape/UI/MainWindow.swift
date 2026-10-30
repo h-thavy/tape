@@ -117,6 +117,21 @@ final class MainWindow: ObservableObject {
             Onboarding.snapshot(to: folder)
             Toast.snapshots(to: folder)
             NotchBar.snapshots(to: folder)
+            for (name, image) in [("menubar", TapeMark.menuBarImage()), ("menubar-update", TapeMark.menuBarImage(update: true)),
+                                  ("menubar-recording", TapeMark.menuBarImage(recording: true))] {
+                let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 78, pixelsHigh: 54, bitsPerSample: 8, samplesPerPixel: 4,
+                                           hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+                rep.size = NSSize(width: 26, height: 18)
+                NSGraphicsContext.saveGraphicsState()
+                NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+                NSColor(white: 0.12, alpha: 1).setFill()
+                NSRect(x: 0, y: 0, width: 26, height: 18).fill()
+                NSAppearance(named: .darkAqua)!.performAsCurrentDrawingAppearance {
+                    image.draw(in: NSRect(x: 0, y: 0, width: 26, height: 18))
+                }
+                NSGraphicsContext.restoreGraphicsState()
+                try? rep.representation(using: .png, properties: [:])?.write(to: folder.appendingPathComponent("\(name).png"))
+            }
             NSApp.terminate(nil)
         }
     }

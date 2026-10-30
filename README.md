@@ -65,7 +65,8 @@ curl -fsSL https://raw.githubusercontent.com/h-thavy/tape/main/scripts/install.s
   restores them). *Copy recording* puts the audio file on the clipboard, to paste into a chat, an email or
   Finder; recordings can also be dragged out of the library.
 - **Updates itself.** Tape checks GitHub for a new version and updates in one click (never during a recording
-  or a recap), keeping your recordings, keys and settings. No need to run the install command again.
+  or a recap), keeping your recordings, keys and settings. No need to run the install command again. A new
+  version puts a dot on the menu bar icon; click the icon and *Update to Tape x.y.z* is at the top.
 - **Switching devices mid-call is seamless.** Speakers → AirPods, a new mic, a headset going into call mode:
   the other people keep recording without a break, and your mic hands over with a 10 ms cross-fade.
 
