@@ -56,7 +56,8 @@ curl -fsSL https://raw.githubusercontent.com/h-thavy/tape/main/scripts/install.s
   before Tape or from anywhere else: audio (m4a, mp3, wav, aac, flac, ogg…) or video (the sound is taken out).
   Recordings already in `~/Documents/Tape` show up by themselves, with a "Make recap" button.
 - **Follows the call's mute button.** Muted in the meeting: your mic is left out entirely. Unmuted: it's
-  recorded. Tape asks for its permissions at every launch while one is missing, and again whenever one is
+  recorded. The introduction doesn't go on until all three permissions are allowed; after that, Tape asks for
+  them at every launch while one is missing, and again whenever one is
   turned off; while it can't see the mute button, the notch and the window say so. (Needs Accessibility. A browser shows only its visible tab, so while a browser call's tab is in
   the background Tape keeps the last state it saw.)
 - **Names itself.** A recording takes the meeting's title when its window shows one ("Meet – Weekly sync",

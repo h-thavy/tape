@@ -1,3 +1,4 @@
+import AVFoundation
 import AppKit
 import ServiceManagement
 import SwiftUI
@@ -75,6 +76,7 @@ private struct OnboardingView: View {
     var fixedPhase: Int?
     @ObservedObject private var onboarding = Onboarding.shared
     @ObservedObject private var settings = SettingsModel.shared
+    @ObservedObject private var permissions = PermissionStatus.shared
 
     private var step: Int { fixedStep ?? onboarding.step }
 
@@ -84,7 +86,7 @@ private struct OnboardingView: View {
                 Theme.fill.opacity(0.55)
                 scene
             }
-            .frame(height: 300)
+            .frame(height: 276)
             .clipped()
             VStack(alignment: .leading, spacing: 10) {
                 Text(title).font(Theme.display(26)).tracking(-0.8).foregroundStyle(Theme.ink)
@@ -138,6 +140,12 @@ private struct OnboardingView: View {
     @ViewBuilder private var extra: some View {
         if step == 4 {
             PermissionList().padding(.top, 8)
+            // Continue waits for all three (snapshots show the step as it first appears).
+            if !permissions.all || fixedStep != nil {
+                Text(permissions.missing.isEmpty ? "Allow all three to continue."
+                     : "Allow \(ListFormatter.localizedString(byJoining: permissions.missing)) to continue.")
+                    .font(Theme.sans(12.5)).foregroundStyle(Theme.ink3)
+            }
         } else if step == 5 {
             VStack(spacing: 8) {
                 KeyField(service: .gemini)
@@ -164,6 +172,8 @@ private struct OnboardingView: View {
             if step < Onboarding.steps - 1 {
                 Button(step == 5 && !settings.hasKeys ? "Later" : "Continue") { go(step + 1) }.buttonStyle(.pill)
                     .keyboardShortcut(.defaultAction)
+                    .disabled(step == 4 && !permissions.all)
+                    .help(step == 4 && !permissions.all ? "Allow all three permissions first" : "")
             } else {
                 Button("Open Tape") { onboarding.finish() }.buttonStyle(.pill)
                     .keyboardShortcut(.defaultAction)
@@ -517,48 +527,98 @@ private struct PermissionPromptView: View {
     }
 }
 
+/// The three permissions as they are now, checked every second (they're switched on in System Settings, so
+/// there's no notice when they change).
+@MainActor
+final class PermissionStatus: ObservableObject {
+    static let shared = PermissionStatus()
+    enum Kind { case microphone, systemAudio, accessibility }
+
+    @Published private(set) var microphone = false
+    @Published private(set) var systemAudio = false
+    @Published private(set) var accessibility = false
+    /// The answer to Tape's own system audio request, for when TCC can't be asked directly.
+    private var audioAnswer = false
+    private var timer: Timer?
+
+    var all: Bool { microphone && systemAudio && accessibility }
+    var missing: [String] {
+        [(microphone, "the microphone"), (systemAudio, "system audio"), (accessibility, "Accessibility")].filter { !$0.0 }.map(\.1)
+    }
+
+    init() {
+        refresh()
+        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
+            MainActor.assumeIsolated { PermissionStatus.shared.refresh() }
+        }
+    }
+
+    func refresh() {
+        let mic = Permissions.microphone, audio = Permissions.systemAudio ?? audioAnswer, ax = Permissions.accessibility
+        if mic != microphone { microphone = mic }
+        if audio != systemAudio { systemAudio = audio }
+        if ax != accessibility { accessibility = ax }
+    }
+
+    /// macOS's own prompt the first time; once it has been answered "Don't Allow", macOS won't ask again, so
+    /// the page in System Settings where it's switched on.
+    func request(_ kind: Kind) {
+        switch kind {
+        case .microphone:
+            if AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
+                Task { _ = await Permissions.requestMicrophone(); refresh() }
+            } else {
+                Self.openPane("Privacy_Microphone")
+            }
+        case .systemAudio:
+            if Permissions.systemAudio == false {
+                Self.openPane("Privacy_AudioCapture")
+            } else {
+                Task {
+                    audioAnswer = await Permissions.requestSystemAudio()
+                    refresh()
+                    if !systemAudio { Self.openPane("Privacy_AudioCapture") }
+                }
+            }
+        case .accessibility:
+            Permissions.requestAccessibility()
+            Self.openPane("Privacy_Accessibility")
+        }
+    }
+
+    private static func openPane(_ pane: String) {
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)")!)
+    }
+}
+
 private struct PermissionList: View {
-    @State private var refresh = 0
-    @State private var audioGranted = false
-    private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+    @ObservedObject private var status = PermissionStatus.shared
 
     var body: some View {
         HStack(spacing: 10) {
-            item("Microphone", granted: Permissions.microphone, pane: "Privacy_Microphone") {
-                Task { _ = await Permissions.requestMicrophone(); refresh += 1 }
-            }
-            item("System audio", granted: Permissions.systemAudio ?? audioGranted, pane: "Privacy_AudioCapture") {
-                Task { audioGranted = await Permissions.requestSystemAudio(); refresh += 1 }
-            }
-            item("Accessibility", granted: Permissions.accessibility, pane: "Privacy_Accessibility") {
-                Permissions.requestAccessibility()
-            }
+            item("Microphone", granted: status.microphone) { status.request(.microphone) }
+            item("System audio", granted: status.systemAudio) { status.request(.systemAudio) }
+            item("Accessibility", granted: status.accessibility) { status.request(.accessibility) }
         }
-        .id(refresh)
-        .onReceive(timer) { _ in refresh += 1 }
     }
 
-    private func item(_ title: String, granted: Bool, pane: String, request: @escaping () -> Void) -> some View {
+    private func item(_ title: String, granted: Bool, request: @escaping () -> Void) -> some View {
         HStack(spacing: 8) {
             Text(title).font(Theme.sans(13, .medium)).lineLimit(1).fixedSize()
             Spacer(minLength: 4)
             if granted {
                 Label("Allowed", systemImage: "checkmark.circle.fill").font(Theme.sans(12, .semibold)).foregroundStyle(Theme.ready)
             } else {
-                Button("Allow") {
-                    request()
-                    if pane == "Privacy_Accessibility" {
-                        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)")!)
-                    }
-                }
-                .buttonStyle(.pill).controlSize(.small)
-                .accessibilityLabel("Allow \(title)")
+                Button("Allow", action: request)
+                    .buttonStyle(.pill).controlSize(.small)
+                    .accessibilityLabel("Allow \(title)")
             }
         }
         .padding(.horizontal, 12).frame(height: 44)
         .frame(maxWidth: .infinity)
-        .background(RoundedRectangle(cornerRadius: Theme.radiusMedium).strokeBorder(Theme.line))
+        .background(RoundedRectangle(cornerRadius: Theme.radiusMedium).strokeBorder(granted ? Theme.line : Theme.ink3.opacity(0.6)))
         .accessibilityElement(children: .contain)
+        .accessibilityValue(granted ? "Allowed" : "Not allowed")
     }
 }
 
