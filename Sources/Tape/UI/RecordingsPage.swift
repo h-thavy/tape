@@ -245,7 +245,7 @@ private struct RecordingDetail: View {
             switch tab {
             case .recap:
                 if let recap = Library.shared.recap(item) {
-                    MarkdownView(markdown: recap)
+                    MarkdownView(markdown: recap, skipTitle: true)
                 } else {
                     EmptyState(title: "No recap yet", detail: item.isWorking ? "It appears here when it's ready." : nil)
                 }
@@ -427,10 +427,18 @@ private struct PlayerBar: View {
 /// A recap as it reads in the app: serif title, section headings, bullets with bold lead-ins.
 struct MarkdownView: View {
     let markdown: String
+    /// Leave out the first heading (the page already shows it as its title).
+    var skipTitle = false
+
+    private var blocks: [MarkdownBlock] {
+        var blocks = MarkdownBlock.parse(markdown)
+        if skipTitle, case .heading(1, _)? = blocks.first { blocks.removeFirst() }
+        return blocks
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(MarkdownBlock.parse(markdown).enumerated()), id: \.offset) { _, block in
+            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
                 switch block {
                 case .heading(let level, let text):
                     inline(text).font(level == 1 ? Theme.serif(26) : level == 2 ? Theme.sans(18, .semibold) : Theme.sans(15.5, .semibold))

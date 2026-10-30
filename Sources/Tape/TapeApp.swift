@@ -197,9 +197,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func refresh() {
         guard let button = item.button else { return }
         if recorder.isRecording {
-            let symbol = NSImage(systemSymbolName: recorder.isMuted ? "mic.slash.circle.fill" : "record.circle.fill",
-                                 accessibilityDescription: "Recording")
-            button.image = symbol?.withSymbolConfiguration(.init(paletteColors: [.white, .systemRed]))
+            button.image = TapeMark.menuBarImage(recording: true, muted: recorder.isMuted)
             button.imagePosition = .imageLeading
             updateClock()
             if clock == nil {
@@ -210,8 +208,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else {
             clock?.invalidate()
             clock = nil
-            button.image = NSImage(systemSymbolName: "record.circle", accessibilityDescription: "Tape")
-            button.image?.isTemplate = true
+            button.image = TapeMark.menuBarImage()
             button.title = recorder.saving > 0 ? " Saving…" : ""
         }
     }

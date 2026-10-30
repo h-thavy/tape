@@ -76,7 +76,7 @@ scripts/build-app.sh        # → build/Tape.app, signed with your Apple Develop
 open build/Tape.app
 swift test                  # the mixer, mic alignment, recap prompts and Markdown
 scripts/release.sh          # dist/Tape.zip for a GitHub release (--publish to upload it)
-swift scripts/make-icon.swift
+swift scripts/make-icon.swift   # the cassette icon (same geometry as TapeMark, which also draws the menu bar icon)
 ```
 
 Test hooks: `open --env TAPE_TEST_RECORD=10 build/Tape.app` records for 10 s, saves and quits;

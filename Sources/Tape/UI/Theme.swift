@@ -67,22 +67,54 @@ extension Color {
 
 // MARK: - Mark
 
-/// Tape's mark: two reels joined by the tape running under them.
+/// Tape's mark: a cassette. Same geometry as scripts/make-icon.swift, which renders the app icon.
 enum TapeMark {
-    /// The glyph in `box` (a square, y-up).
-    static func path(in box: CGRect) -> CGPath {
+    /// The cassette in `box` (a square, y-up): the body with its window and the notch cut out (fill even-odd),
+    /// the window, and the two reels (even-odd).
+    static func paths(in box: CGRect) -> (body: CGPath, window: CGPath, reels: CGPath) {
         let s = box.width / 1024
-        let path = CGMutablePath()
-        let r: CGFloat = 170 * s, hole: CGFloat = 58 * s, cy = box.midY + 40 * s
-        for cx in [box.midX - 215 * s, box.midX + 215 * s] {
-            path.addEllipse(in: CGRect(x: cx - r, y: cy - r, width: 2 * r, height: 2 * r))
-            path.addEllipse(in: CGRect(x: cx - hole, y: cy - hole, width: 2 * hole, height: 2 * hole))
+        func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: box.minX + x * s, y: box.minY + y * s) }
+        func r(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat) -> CGRect {
+            CGRect(origin: p(x, y), size: CGSize(width: w * s, height: h * s))
         }
-        // The tape: a bar along the bottom of the reels.
-        let bar = 44 * s
-        path.addRoundedRect(in: CGRect(x: box.midX - 215 * s, y: cy - r - bar / 2 + 6 * s, width: 430 * s, height: bar),
-                            cornerWidth: bar / 2, cornerHeight: bar / 2)
-        return path
+        let window = CGPath(roundedRect: r(240, 478, 544, 180), cornerWidth: 40 * s, cornerHeight: 40 * s, transform: nil)
+        let body = CGMutablePath()
+        body.addRoundedRect(in: r(112, 300, 800, 460), cornerWidth: 64 * s, cornerHeight: 64 * s)
+        body.addPath(window)
+        // The notch along the bottom edge, where the tape meets the head.
+        body.move(to: p(322, 300)); body.addLine(to: p(366, 364)); body.addLine(to: p(658, 364)); body.addLine(to: p(702, 300))
+        body.closeSubpath()
+        let reels = CGMutablePath()
+        for cx: CGFloat in [372, 652] {
+            reels.addEllipse(in: r(cx - 64, 568 - 64, 128, 128))
+            reels.addEllipse(in: r(cx - 26, 568 - 26, 52, 52))
+        }
+        return (body, window, reels)
+    }
+
+    /// The menu bar icon: the cassette in the menu bar's own ink (it follows light and dark menu bars), with a
+    /// red dot while recording (grey while you're muted in the call).
+    static func menuBarImage(recording: Bool = false, muted: Bool = false) -> NSImage {
+        let image = NSImage(size: NSSize(width: 27, height: 18), flipped: false) { rect in
+            guard let cg = NSGraphicsContext.current?.cgContext else { return false }
+            let mark = paths(in: CGRect(x: rect.midX - 13, y: rect.midY - 13.5, width: 26, height: 26))
+            cg.addPath(mark.body)
+            cg.setFillColor(NSColor.labelColor.cgColor)
+            cg.fillPath(using: .evenOdd)
+            cg.addPath(mark.reels)
+            cg.fillPath(using: .evenOdd)
+            if recording {
+                let dot = CGRect(x: rect.maxX - 7.5, y: rect.maxY - 7, width: 7, height: 7)
+                cg.setFillColor(NSColor.windowBackgroundColor.cgColor)
+                cg.fillEllipse(in: dot.insetBy(dx: -1.2, dy: -1.2))
+                cg.setFillColor((muted ? NSColor.systemGray : NSColor.systemRed).cgColor)
+                cg.fillEllipse(in: dot)
+            }
+            return true
+        }
+        // Without a dot, a template: macOS tints it exactly like the other menu bar icons.
+        image.isTemplate = !recording
+        return image
     }
 }
 
@@ -91,9 +123,11 @@ struct TapeMarkView: View {
 
     var body: some View {
         Canvas { context, canvasSize in
+            let mark = TapeMark.paths(in: CGRect(origin: .zero, size: canvasSize))
             let flip = CGAffineTransform(translationX: 0, y: canvasSize.height).scaledBy(x: 1, y: -1)
-            context.fill(Path(TapeMark.path(in: CGRect(origin: .zero, size: canvasSize))).applying(flip),
-                         with: .color(Theme.ink), style: FillStyle(eoFill: true))
+            context.fill(Path(mark.window).applying(flip), with: .color(Theme.accent))
+            context.fill(Path(mark.body).applying(flip), with: .color(Theme.ink), style: FillStyle(eoFill: true))
+            context.fill(Path(mark.reels).applying(flip), with: .color(Theme.ink), style: FillStyle(eoFill: true))
         }
         .frame(width: size, height: size)
         .accessibilityHidden(true)

@@ -2,7 +2,9 @@
 //
 //   swift scripts/make-icon.swift
 //
-// The mark: two tape reels joined by the tape, in ink on Onword's sand tile (same geometry as `TapeMark` in the app), on the macOS icon grid (824 pt rounded square on a 1024 canvas).
+// The mark: a cassette, in ink on Onword's sand tile, its window in Onword's lavender. Same geometry as
+// `TapeMark` in the app (which also draws the menu bar icon), on the macOS icon grid (824 pt rounded square
+// on a 1024 canvas).
 import AppKit
 
 let root = URL(fileURLWithPath: CommandLine.arguments.first.map { URL(fileURLWithPath: $0).deletingLastPathComponent().deletingLastPathComponent().path } ?? ".")
@@ -13,21 +15,27 @@ func color(_ hex: UInt32) -> NSColor {
             blue: CGFloat(hex & 0xFF) / 255, alpha: 1)
 }
 
-/// Same geometry as `TapeMark.path` in the app.
-func drawGlyph(in box: CGRect) {
+/// The cassette in a 1024-unit box (y-up): the body with its window and the notch cut out, the window, and
+/// the two reels.
+func cassette(in box: CGRect) -> (body: CGPath, window: CGPath, reels: CGPath) {
     let s = box.width / 1024
-    let path = NSBezierPath()
-    path.windingRule = .evenOdd
-    let r: CGFloat = 170 * s, hole: CGFloat = 58 * s, cy = box.midY + 40 * s
-    for cx in [box.midX - 215 * s, box.midX + 215 * s] {
-        path.appendOval(in: CGRect(x: cx - r, y: cy - r, width: 2 * r, height: 2 * r))
-        path.appendOval(in: CGRect(x: cx - hole, y: cy - hole, width: 2 * hole, height: 2 * hole))
+    func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: box.minX + x * s, y: box.minY + y * s) }
+    func r(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat) -> CGRect { CGRect(origin: p(x, y), size: CGSize(width: w * s, height: h * s)) }
+
+    let window = CGPath(roundedRect: r(240, 478, 544, 180), cornerWidth: 40 * s, cornerHeight: 40 * s, transform: nil)
+    let body = CGMutablePath()
+    body.addRoundedRect(in: r(112, 300, 800, 460), cornerWidth: 64 * s, cornerHeight: 64 * s)
+    body.addPath(window)
+    // The notch along the bottom edge, where the tape meets the head.
+    body.move(to: p(322, 300)); body.addLine(to: p(366, 364)); body.addLine(to: p(658, 364)); body.addLine(to: p(702, 300))
+    body.closeSubpath()
+
+    let reels = CGMutablePath()
+    for cx: CGFloat in [372, 652] {
+        reels.addEllipse(in: r(cx - 64, 568 - 64, 128, 128))
+        reels.addEllipse(in: r(cx - 26, 568 - 26, 52, 52))
     }
-    color(0x1A1A1A).setFill()
-    path.fill()
-    let bar: CGFloat = 44 * s
-    NSBezierPath(roundedRect: CGRect(x: box.midX - 215 * s, y: cy - r - bar / 2 + 6 * s, width: 430 * s, height: bar),
-                 xRadius: bar / 2, yRadius: bar / 2).fill()
+    return (body, window, reels)
 }
 
 func icon(size: Int) -> NSBitmapImageRep {
@@ -36,11 +44,12 @@ func icon(size: Int) -> NSBitmapImageRep {
                                bytesPerRow: 0, bitsPerPixel: 0)!
     NSGraphicsContext.saveGraphicsState()
     NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+    let cg = NSGraphicsContext.current!.cgContext
     let scale = CGFloat(size) / 1024
-    NSGraphicsContext.current!.cgContext.scaleBy(x: scale, y: scale)
+    cg.scaleBy(x: scale, y: scale)
 
-    let body = CGRect(x: 100, y: 100, width: 824, height: 824)
-    let shape = NSBezierPath(roundedRect: body, xRadius: 185, yRadius: 185)
+    let tile = CGRect(x: 100, y: 100, width: 824, height: 824)
+    let shape = NSBezierPath(roundedRect: tile, xRadius: 185, yRadius: 185)
     NSGraphicsContext.saveGraphicsState()
     let shadow = NSShadow()
     shadow.shadowColor = NSColor.black.withAlphaComponent(0.20)
@@ -55,7 +64,11 @@ func icon(size: Int) -> NSBitmapImageRep {
     shape.lineWidth = 2
     shape.stroke()
 
-    drawGlyph(in: CGRect(x: 127, y: 107, width: 770, height: 770))
+    // The cassette, a little smaller than the tile's grid so it breathes.
+    let mark = cassette(in: CGRect(x: 152, y: 140, width: 720, height: 720))
+    cg.addPath(mark.window); cg.setFillColor(color(0xF4E1FF).cgColor); cg.fillPath()
+    cg.addPath(mark.body); cg.setFillColor(color(0x1A1A1A).cgColor); cg.fillPath(using: .evenOdd)
+    cg.addPath(mark.reels); cg.setFillColor(color(0x1A1A1A).cgColor); cg.fillPath(using: .evenOdd)
     NSGraphicsContext.restoreGraphicsState()
     return rep
 }
