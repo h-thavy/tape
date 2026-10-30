@@ -28,8 +28,14 @@ if [[ -f "$SIGNING_DIR/onword-signing.keychain-db" && -f "$SIGNING_DIR/keychain-
   RELEASE_IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" | awk '/"Onword Release"/ {print $2; exit}')"
 fi
 if [[ -z "$RELEASE_IDENTITY" || "$RELEASE_IDENTITY" == "-" ]]; then
+  # A release signed by anything else would be a new app to macOS: permissions and the Keychain items holding
+  # the API keys would ask again. Never publish one.
+  if [[ "${1:-}" == "--publish" ]]; then
+    echo "error: the release certificate wasn't found in $SIGNING_DIR; not publishing" >&2
+    exit 1
+  fi
   RELEASE_IDENTITY="-"
-  echo "warning: release certificate not found; signing ad-hoc (permissions reset after this update)" >&2
+  echo "warning: release certificate not found; signing ad-hoc (local test build only)" >&2
 fi
 OUT_DIR=dist/build SIGN_IDENTITY="$RELEASE_IDENTITY" scripts/build-app.sh
 codesign --verify --deep --strict dist/build/Tape.app
