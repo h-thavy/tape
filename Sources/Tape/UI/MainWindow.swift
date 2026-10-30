@@ -12,17 +12,20 @@ final class MainWindow: ObservableObject {
     @Published var page: Page = .recordings
     /// The recording open on the Recordings page (nil: the list).
     @Published var selected: String?
+    /// The recording whose name is being typed (its title becomes a field).
+    @Published var renaming: String?
     private var window: NSWindow?
 
-    func show(recording: String? = nil, page: Page = .recordings) {
+    func show(recording: String? = nil, page: Page = .recordings, rename: Bool = false) {
         self.page = page
         if let recording { selected = recording }
+        renaming = rename ? recording : nil
         let window = window ?? makeWindow()
         self.window = window
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
-        // Nothing focused at first (the search field would take the cursor).
-        DispatchQueue.main.async { window.makeFirstResponder(nil) }
+        // Nothing focused at first (the search field would take the cursor), unless a name is being typed.
+        if !rename { DispatchQueue.main.async { window.makeFirstResponder(nil) } }
     }
 
     /// Debug hook: TAPE_SNAPSHOT=<folder> saves the window's pages there as PNGs (list, first recording,
@@ -120,6 +123,7 @@ private struct Sidebar: View {
 
             Spacer(minLength: 0)
 
+            UpdateCard()
             StatusCard()
                 .padding(.bottom, 8)
             Divider().overlay(Theme.border)
@@ -161,6 +165,33 @@ private struct NavItem: View {
         .buttonStyle(.plainPointer)
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.15), value: hovering)
+    }
+}
+
+/// A newer Tape is on GitHub: one click to update.
+private struct UpdateCard: View {
+    @ObservedObject private var updates = UpdateChecker.shared
+
+    var body: some View {
+        switch updates.state {
+        case .available(let version), .waiting(let version), .downloading(let version, _), .installing(let version):
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Tape \(version) is ready", systemImage: "arrow.down.circle").font(Theme.sans(12.5, .semibold))
+                if case .available = updates.state {
+                    Button("Update") { updates.update() }.buttonStyle(.pill).controlSize(.small)
+                } else {
+                    Text(updates.state == .waiting(version) ? "After this recording" : "Updating…")
+                        .font(Theme.sans(11.5)).foregroundStyle(Theme.inkTertiary)
+                }
+            }
+            .foregroundStyle(Theme.onAccent)
+            .padding(.horizontal, 14).padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 6).fill(Theme.accent))
+            .padding(.bottom, 4)
+        default:
+            EmptyView()
+        }
     }
 }
 

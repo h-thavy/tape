@@ -49,6 +49,10 @@ curl -fsSL https://raw.githubusercontent.com/h-thavy/tape/main/scripts/install.s
 - **Follows the call's mute button.** Muted in the meeting: your mic is left out entirely. Unmuted: it's
   recorded. (Needs Accessibility. A browser shows only its visible tab, so while a browser call's tab is in
   the background Tape keeps the last state it saw.)
+- **Names.** When a recording is saved, Tape asks whether to name it; click a recording's title to rename it
+  later. Its files take the name (`<name>.m4a`, `.transcript.txt`, `.recap.md`), and Claude sees it.
+- **Updates itself.** Tape checks GitHub for a new version and updates in one click (never during a recording
+  or a recap), keeping your recordings, keys and settings. No need to run the install command again.
 - **Switching devices mid-call is seamless.** Speakers → AirPods, a new mic, a headset going into call mode:
   the other people keep recording without a break, and your mic hands over with a 10 ms cross-fade.
 
@@ -83,7 +87,8 @@ Test hooks: `open --env TAPE_TEST_RECORD=10 build/Tape.app` records for 10 s, sa
 `--env TAPE_TEST_IMPORT=<file>,<file>` imports files and quits;
 `--env TAPE_DEBUG_TRACKS=1` also keeps the raw `mic.caf` and `call.caf` (in
 `~/Library/Application Support/Tape/Recording`); `--env TAPE_DEBUG_AX=1` logs what the mute-button search
-sees; `--env TAPE_SNAPSHOT=<folder>` saves the window's pages as PNGs.
+sees; `--env TAPE_SNAPSHOT=<folder>` saves the window's pages as PNGs; `--env TAPE_TEST_VERSION=0.1.0
+--env TAPE_TEST_AUTOUPDATE=1` runs the self-update from GitHub.
 
 ## Layout
 

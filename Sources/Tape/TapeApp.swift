@@ -87,6 +87,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             await firstLaunch()
             watcher.start()
             Processor.shared.resume()
+            UpdateChecker.shared.start()
         }
     }
 
@@ -225,6 +226,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
         menu.addItem(withTitle: "Open Tape", action: #selector(openWindow), keyEquivalent: "")
+        if let version = UpdateChecker.shared.availableVersion {
+            menu.addItem(withTitle: "Update to Tape \(version)…", action: #selector(update), keyEquivalent: "")
+        }
         menu.addItem(.separator())
         if recorder.isRecording {
             menu.addItem(withTitle: "Stop and save", action: #selector(toggleRecording), keyEquivalent: "")
@@ -271,6 +275,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func openWindow() { MainWindow.shared.show() }
+    @objc private func update() { UpdateChecker.shared.update() }
     @objc private func toggleAsk() { SettingsModel.shared.askOnCalls.toggle() }
     @objc private func toggleAuto() { SettingsModel.shared.autoRecord.toggle() }
     @objc private func toggleLogin() { SettingsModel.shared.openAtLogin.toggle() }

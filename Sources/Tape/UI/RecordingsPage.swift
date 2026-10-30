@@ -119,6 +119,9 @@ private struct RecordingRow: View {
                 StatusChip(item: item)
             }
         } actions: {
+            IconButton(systemImage: "pencil", help: "Rename") {
+                MainWindow.shared.show(recording: item.id, rename: true)
+            }
             IconButton(systemImage: "folder", help: "Show in Finder") {
                 NSWorkspace.shared.activateFileViewerSelecting([Library.shared.audioURL(item)])
             }
@@ -222,8 +225,7 @@ private struct RecordingDetail: View {
             .buttonStyle(.plainPointer)
 
             VStack(alignment: .leading, spacing: 6) {
-                Text(item.displayTitle).font(Theme.serif(32)).tracking(-0.8).foregroundStyle(Theme.ink)
-                    .textSelection(.enabled)
+                RecordingName(item: item)
                 Text([item.created.formatted(date: .complete, time: .shortened), Recorder.duration(item.duration), item.app]
                     .compactMap { $0 }.joined(separator: " · "))
                     .font(Theme.sans(14)).foregroundStyle(Theme.inkTertiary)
@@ -288,6 +290,59 @@ private struct RecordingDetail: View {
                 }
             }
         }
+    }
+}
+
+/// The recording's name as the page title. Click it (or the pencil) to rename; Return saves, Escape cancels.
+private struct RecordingName: View {
+    let item: RecordingItem
+    @ObservedObject private var main = MainWindow.shared
+    @State private var draft = ""
+    @FocusState private var focused: Bool
+    @State private var hovering = false
+
+    private var editing: Bool { main.renaming == item.id }
+
+    var body: some View {
+        Group {
+            if editing {
+                VStack(alignment: .leading, spacing: 6) {
+                    TextField("Name this recording", text: $draft)
+                        .textFieldStyle(.plain)
+                        .font(Theme.serif(32)).tracking(-0.8).foregroundStyle(Theme.ink)
+                        .focused($focused)
+                        .onSubmit(save)
+                        .onExitCommand { main.renaming = nil }
+                        .padding(.horizontal, 8).padding(.vertical, 2)
+                        .background(RoundedRectangle(cornerRadius: Theme.radius).fill(Theme.panel))
+                        .overlay(RoundedRectangle(cornerRadius: Theme.radius).strokeBorder(Theme.outline))
+                        .padding(.horizontal, -8)
+                    HStack(spacing: 8) {
+                        Button("Save", action: save).buttonStyle(.pill).controlSize(.small)
+                        Button("Cancel") { main.renaming = nil }.buttonStyle(.pillQuiet).controlSize(.small)
+                        Text("The recording's files are renamed too.").font(Theme.sans(12.5)).foregroundStyle(Theme.inkTertiary)
+                    }
+                }
+                .onAppear {
+                    draft = item.name ?? item.title ?? ""
+                    DispatchQueue.main.async { focused = true }
+                }
+            } else {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(item.displayTitle).font(Theme.serif(32)).tracking(-0.8).foregroundStyle(Theme.ink)
+                        .onTapGesture { main.renaming = item.id }
+                        .help("Click to rename")
+                    IconButton(systemImage: "pencil", help: "Rename") { main.renaming = item.id }
+                        .opacity(hovering ? 1 : 0)
+                }
+                .onHover { hovering = $0 }
+            }
+        }
+    }
+
+    private func save() {
+        main.renaming = nil
+        Library.shared.rename(item.id, to: draft)
     }
 }
 

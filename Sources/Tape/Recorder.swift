@@ -145,12 +145,16 @@ final class Recorder: ObservableObject {
                 // Into the library, and on to its transcript and recap.
                 let item = Library.shared.add(audio: saved, app: name, duration: seconds)
                 Processor.shared.process(item.id)
+                // Saved: ask whether to give it a name (it's used for its files and in the recap).
                 Toast.shared.show(.init(
-                    id: "saved", symbol: "checkmark", title: "Recording saved",
+                    id: "saved", symbol: "checkmark", title: "Recording saved. Name it?",
                     message: ([name, Self.duration(seconds)].compactMap { $0 } + [APIKeys.complete ? "Making the recap…" : "Add API keys for a recap"])
                         .joined(separator: " · "),
-                    primary: .init(title: "Open") { MainWindow.shared.show(recording: item.id) },
-                    timeout: 10))
+                    primary: .init(title: "Name it", symbol: "pencil") {
+                        MainWindow.shared.show(recording: Library.shared.item(item.id)?.id ?? item.id, rename: true)
+                    },
+                    secondary: .init(title: "Not now") {},
+                    timeout: 20))
             }
         }
     }

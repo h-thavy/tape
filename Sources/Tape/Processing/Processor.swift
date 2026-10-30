@@ -69,8 +69,9 @@ final class Processor {
             }
             library.update(id) { $0.status = .writing; $0.detail = "Writing the recap…" }
             let date = item.created.formatted(.dateTime.day().month(.wide).year().hour().minute())
+            // A name given meanwhile is what the recording is called.
             let request = RecapPrompts.recapRequest(
-                recording: item.id, date: date, seconds: item.duration, app: item.app,
+                recording: library.item(id)?.name ?? item.id, date: date, seconds: item.duration, app: item.app,
                 transcriptFile: library.transcriptURL(item).lastPathComponent, transcript: transcript ?? "")
             let recap = try await claude.recap(system: RecapPrompts.recapSystem, request: request)
             try (recap + "\n").write(to: library.recapURL(item), atomically: true, encoding: .utf8)
@@ -80,10 +81,11 @@ final class Processor {
                 $0.title = RecapFormat.title(of: recap)
             }
             log.notice("Recap for \(id, privacy: .public) ready after \(Int(Date().timeIntervalSince(started))) s")
-            let title = library.item(id)?.displayTitle ?? "Your meeting"
+            let named = library.applyName(id)
+            let title = library.item(named)?.displayTitle ?? "Your meeting"
             Toast.shared.show(.init(
                 id: "recap", symbol: "doc.text", title: "Recap ready", message: title,
-                primary: .init(title: "Open") { MainWindow.shared.show(recording: id) },
+                primary: .init(title: "Open") { MainWindow.shared.show(recording: named) },
                 timeout: 10))
         } catch {
             log.error("Processing \(id, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
@@ -91,6 +93,7 @@ final class Processor {
                 $0.status = .failed
                 $0.detail = error.localizedDescription
             }
+            library.applyName(id)
         }
     }
 }

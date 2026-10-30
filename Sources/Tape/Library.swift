@@ -28,10 +28,13 @@ struct RecordingItem: Codable, Identifiable, Equatable {
     var detail: String?
     /// The meeting's subject, from the recap's heading.
     var title: String?
+    /// The name you gave it (its files are named after it too).
+    var name: String?
 
     var isWorking: Bool { [.queued, .transcribing, .writing].contains(status) }
     /// The recap's title; before there is one, the call app ("Google Meet in Opera GX" → "Google Meet call").
     var displayTitle: String {
+        if let name { return name }
         if let title { return title }
         // An imported recording: its file name.
         guard var name = app else { return id }
@@ -181,6 +184,58 @@ final class Library: ObservableObject {
             export.exportAsynchronously { done.resume() }
         }
         guard export.status == .completed else { throw export.error ?? CocoaError(.fileWriteUnknown) }
+    }
+
+    // MARK: - Renaming
+
+    /// Names a recording. Its files (audio, transcript, recap) take the name too, as "<name>.m4a",
+    /// "<name>.transcript.txt" and "<name>.recap.md"; while it's being transcribed or recapped, that waits until
+    /// it's done. An empty name goes back to the recap's title. Returns the recording's id (it changes with the files).
+    @discardableResult
+    func rename(_ id: String, to raw: String) -> String {
+        let name = Self.fileSafe(raw)
+        update(id) { $0.name = name.isEmpty ? nil : name }
+        guard let item = item(id), !item.isWorking, !name.isEmpty else { return id }
+        return moveFiles(of: id, to: name)
+    }
+
+    /// After processing: gives the files the name chosen meanwhile.
+    @discardableResult
+    func applyName(_ id: String) -> String {
+        guard let item = item(id), let name = item.name, !item.isWorking, item.id != name else { return id }
+        return moveFiles(of: id, to: name)
+    }
+
+    private func moveFiles(of id: String, to name: String) -> String {
+        guard let item = item(id), item.id != name else { return id }
+        let fm = FileManager.default
+        let ext = (item.audioFile as NSString).pathExtension
+        let audio = Self.freeURL(stem: name, ext: ext)
+        let stem = audio.deletingPathExtension().lastPathComponent
+        do {
+            try fm.moveItem(at: audioURL(item), to: audio)
+            for (old, suffix) in [(transcriptURL(item), ".transcript.txt"), (recapURL(item), ".recap.md")] where fm.fileExists(atPath: old.path) {
+                try fm.moveItem(at: old, to: Recordings.folder.appendingPathComponent(stem + suffix))
+            }
+        } catch {
+            log.error("Couldn't rename \(id, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return id
+        }
+        update(id) {
+            $0.id = stem
+            $0.audioFile = audio.lastPathComponent
+        }
+        if MainWindow.shared.selected == id { MainWindow.shared.selected = stem }
+        log.notice("Renamed \(id, privacy: .public) to \(stem, privacy: .public)")
+        return stem
+    }
+
+    /// A name that works as a file name: no slashes or colons, no leading dot, trimmed.
+    static func fileSafe(_ raw: String) -> String {
+        var name = raw.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        while name.hasPrefix(".") { name.removeFirst() }
+        return String(name.prefix(120))
     }
 
     // MARK: - Changes

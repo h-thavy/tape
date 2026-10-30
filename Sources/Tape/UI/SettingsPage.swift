@@ -101,6 +101,10 @@ struct SettingsPage: View {
                 .id(refresh)
             }
 
+            section("Updates") {
+                SettingsCard { UpdateRow() }
+            }
+
             section("General") {
                 SettingsCard {
                     SettingsRow(title: "Appearance") {
@@ -115,16 +119,49 @@ struct SettingsPage: View {
                 }
             }
 
-            Text("Tape \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")")
-                .font(Theme.sans(12)).foregroundStyle(Theme.inkTertiary)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in refresh += 1 }
+        .onAppear { UpdateChecker.shared.checkIfStale() }
     }
 
     private func section(_ title: String, @ViewBuilder _ content: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             SectionLabel(text: title)
             content()
+        }
+    }
+}
+
+/// This version, and the update button when GitHub has a newer one.
+private struct UpdateRow: View {
+    @ObservedObject private var updates = UpdateChecker.shared
+
+    var body: some View {
+        SettingsRow(title: "Tape \(UpdateChecker.currentVersion)", detail: detail, last: true) {
+            switch updates.state {
+            case .available(let version):
+                HStack(spacing: 6) {
+                    Button("What's new") { updates.openRelease() }.buttonStyle(.pillQuiet).controlSize(.small)
+                    Button("Update to \(version)") { updates.update() }.buttonStyle(.pill).controlSize(.small)
+                }
+            case .checking, .downloading, .installing, .waiting:
+                ProgressView().controlSize(.small)
+            default:
+                Button("Check for updates") { updates.check() }.buttonStyle(.pillQuiet).controlSize(.small)
+            }
+        }
+    }
+
+    private var detail: String {
+        switch updates.state {
+        case .unknown: "Checks for updates by itself, and updates in one click."
+        case .checking: "Checking…"
+        case .upToDate: "Up to date."
+        case .available(let version): "Tape \(version) is available. Recordings, keys and settings stay."
+        case .waiting(let version): "Updates to \(version) when the recording or recap in progress is done."
+        case .downloading(let version, let progress): "Downloading \(version)… \(Int(progress * 100)) %"
+        case .installing(let version): "Installing \(version); Tape reopens in a moment."
+        case .failed(let message): message
         }
     }
 }
