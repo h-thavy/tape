@@ -60,14 +60,8 @@ final class UpdateChecker: ObservableObject {
         state = .checking
         lastCheck = Date()
         Task {
-            // github.com/…/releases/latest redirects to …/releases/tag/vX.Y.Z; unlike the GitHub API it has no
-            // hourly limit per network.
-            var request = URLRequest(url: Self.releases, timeoutInterval: 10)
-            request.httpMethod = "HEAD"
             do {
-                let (_, response) = try await URLSession.shared.data(for: request)
-                let tag = response.url?.lastPathComponent ?? ""
-                guard tag.hasPrefix("v"), (response as? HTTPURLResponse)?.statusCode == 200 else { throw UpdateError("no release found") }
+                let tag = try await Self.latestTag()
                 let latest = String(tag.dropFirst())
                 state = Self.isNewer(latest, than: Self.currentVersion) ? .available(latest) : .upToDate
                 log.notice("Update check: latest \(latest, privacy: .public), this \(Self.currentVersion, privacy: .public)")
@@ -90,6 +84,24 @@ final class UpdateChecker: ObservableObject {
                 state = .unknown
             }
         }
+    }
+
+    /// The newest release's tag ("v0.3.1"): from GitHub's API, which is current at once; if that's
+    /// unavailable (it allows 60 requests an hour per network), from github.com/…/releases/latest, which
+    /// redirects to …/releases/tag/vX.Y.Z but can lag a few minutes behind a new release.
+    private static func latestTag() async throws -> String {
+        var api = URLRequest(url: URL(string: "https://api.github.com/repos/\(repo)/releases/latest")!, timeoutInterval: 10)
+        api.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        if let (data, response) = try? await URLSession.shared.data(for: api), (response as? HTTPURLResponse)?.statusCode == 200,
+           let tag = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["tag_name"] as? String, tag.hasPrefix("v") {
+            return tag
+        }
+        var request = URLRequest(url: releases, timeoutInterval: 10)
+        request.httpMethod = "HEAD"
+        let (_, response) = try await URLSession.shared.data(for: request)
+        let tag = response.url?.lastPathComponent ?? ""
+        guard tag.hasPrefix("v"), (response as? HTTPURLResponse)?.statusCode == 200 else { throw UpdateError("no release found") }
+        return tag
     }
 
     func openRelease() {
