@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDisplayName</key>
+	<string>Tape</string>
+	<key>CFBundleExecutable</key>
+	<string>Tape</string>
+	<key>CFBundleIdentifier</key>
+	<string>io.github.h-thavy.tape</string>
+	<key>CFBundleName</key>
+	<string>Tape</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.2.0</string>
+	<key>CFBundleVersion</key>
+	<string>2</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.2</string>
+	<key>LSUIElement</key>
+	<false/>
+	<key>ATSApplicationFontsPath</key>
+	<string>Fonts</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Tape records the other people in your call (what your Mac plays). Recordings stay on this Mac.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Tape records your voice in the calls you choose to record. Recordings stay on this Mac.</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+</dict>
+</plist>

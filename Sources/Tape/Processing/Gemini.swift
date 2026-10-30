@@ -1,0 +1,177 @@
+import Foundation
+import os
+
+/// Transcribes a recording with Gemini (`gemini-3.8-flash`, which handles Khmer mixed with English best):
+/// the audio goes up through the Files API, an interaction runs in the background while Tape checks on it,
+/// and the uploaded file is deleted afterwards.
+struct Gemini {
+    static let model = "gemini-3.8-flash"
+    private static let base = URL(string: "https://generativelanguage.googleapis.com")!
+
+    let key: String
+    private let log = Logger(subsystem: "io.github.h-thavy.tape", category: "gemini")
+
+    struct Failure: LocalizedError {
+        let message: String
+        var errorDescription: String? { message }
+    }
+
+    func transcribe(_ audio: URL, prompt: String, progress: @escaping (String) -> Void) async throws -> String {
+        progress("Uploading the recording…")
+        let file = try await upload(audio)
+        defer { Task { try? await delete(file.name) } }
+        try await waitUntilActive(file.name)
+        progress("Transcribing…")
+        return try await interact(prompt: prompt, fileURI: file.uri, mimeType: file.mimeType)
+    }
+
+    // MARK: - Files API
+
+    private struct UploadedFile {
+        let name: String
+        let uri: String
+        let mimeType: String
+    }
+
+    private func upload(_ audio: URL) async throws -> UploadedFile {
+        let size = (try FileManager.default.attributesOfItem(atPath: audio.path)[.size] as? Int) ?? 0
+        let mimeType = audio.pathExtension.lowercased() == "aac" ? "audio/aac" : "audio/m4a"
+        var start = request("upload/v1beta/files", method: "POST")
+        start.setValue("resumable", forHTTPHeaderField: "X-Goog-Upload-Protocol")
+        start.setValue("start", forHTTPHeaderField: "X-Goog-Upload-Command")
+        start.setValue(String(size), forHTTPHeaderField: "X-Goog-Upload-Header-Content-Length")
+        start.setValue(mimeType, forHTTPHeaderField: "X-Goog-Upload-Header-Content-Type")
+        start.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        start.httpBody = try JSONSerialization.data(withJSONObject: ["file": ["display_name": audio.lastPathComponent]])
+        let (_, startResponse) = try await send(start)
+        guard let uploadURL = (startResponse.value(forHTTPHeaderField: "x-goog-upload-url")).flatMap(URL.init(string:)) else {
+            throw Failure(message: "Gemini didn't accept the upload.")
+        }
+        var upload = URLRequest(url: uploadURL, timeoutInterval: 600)
+        upload.httpMethod = "POST"
+        upload.setValue(String(size), forHTTPHeaderField: "Content-Length")
+        upload.setValue("0", forHTTPHeaderField: "X-Goog-Upload-Offset")
+        upload.setValue("upload, finalize", forHTTPHeaderField: "X-Goog-Upload-Command")
+        let (data, response) = try await URLSession.shared.upload(for: upload, fromFile: audio)
+        try check(data, response)
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let file = json["file"] as? [String: Any], let name = file["name"] as? String, let uri = file["uri"] as? String
+        else { throw Failure(message: "Gemini's upload reply was unexpected.") }
+        log.notice("Uploaded \(size) bytes as \(name, privacy: .public)")
+        return UploadedFile(name: name, uri: uri, mimeType: (file["mimeType"] as? String) ?? mimeType)
+    }
+
+    /// Audio is processed for a moment after upload before it can be used.
+    private func waitUntilActive(_ name: String) async throws {
+        for _ in 0..<120 {
+            let (data, _) = try await send(request("v1beta/\(name)", method: "GET"))
+            let state = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["state"] as? String
+            if state == nil || state == "ACTIVE" { return }
+            if state == "FAILED" { throw Failure(message: "Gemini couldn't read the recording.") }
+            try await Task.sleep(for: .seconds(2))
+        }
+        throw Failure(message: "Gemini took too long to take the recording in.")
+    }
+
+    private func delete(_ name: String) async throws {
+        _ = try await send(request("v1beta/\(name)", method: "DELETE"))
+    }
+
+    // MARK: - Interactions API
+
+    private func interact(prompt: String, fileURI: String, mimeType: String) async throws -> String {
+        var body: [String: Any] = [
+            "model": Self.model,
+            "input": [
+                ["type": "text", "text": prompt],
+                ["type": "audio", "uri": fileURI, "mime_type": mimeType],
+            ],
+            "generation_config": ["thinking_level": "low", "max_output_tokens": 65_536],
+            "background": true,
+        ]
+        var create = request("v1beta/interactions", method: "POST", timeout: 1800)
+        create.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        create.httpBody = try JSONSerialization.data(withJSONObject: body)
+        var data: Data
+        do {
+            (data, _) = try await send(create)
+        } catch let failure as Failure where failure.message.lowercased().contains("background") {
+            // Background runs not offered for this key or model: wait for the answer on the same request.
+            body["background"] = nil
+            create.httpBody = try JSONSerialization.data(withJSONObject: body)
+            (data, _) = try await send(create)
+        }
+        var interaction = try parse(data)
+        // A long recording takes a few minutes: check on it every 5 seconds (for up to 90 minutes).
+        var waited = 0
+        while (interaction["status"] as? String) == "in_progress", let id = interaction["id"] as? String {
+            guard waited < 90 * 60 else { throw Failure(message: "Gemini took longer than 90 minutes.") }
+            try await Task.sleep(for: .seconds(5))
+            waited += 5
+            (data, _) = try await send(request("v1beta/interactions/\(id)", method: "GET"))
+            interaction = try parse(data)
+        }
+        let status = interaction["status"] as? String ?? "unknown"
+        let text = Self.text(of: interaction)
+        switch status {
+        case "completed" where !text.isEmpty:
+            return text
+        case "incomplete" where !text.isEmpty:
+            log.notice("Transcript cut short (incomplete); keeping what came back")
+            return text + "\n\n[The transcript stops here: the recording was too long to transcribe in one go.]"
+        default:
+            let errors = (interaction["errors"] as? [[String: Any]])?.compactMap { $0["message"] as? String }.joined(separator: " ")
+            throw Failure(message: "Gemini didn't finish the transcript (\(status)). \(errors ?? "")")
+        }
+    }
+
+    private func parse(_ data: Data) throws -> [String: Any] {
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw Failure(message: "Gemini's reply was unexpected.")
+        }
+        return json
+    }
+
+    /// The model's text: `steps[type == model_output].content[type == text].text`.
+    private static func text(of interaction: [String: Any]) -> String {
+        let steps = interaction["steps"] as? [[String: Any]] ?? []
+        return steps.filter { $0["type"] as? String == "model_output" }
+            .flatMap { ($0["content"] as? [[String: Any]]) ?? [] }
+            .filter { $0["type"] as? String == "text" }
+            .compactMap { $0["text"] as? String }
+            .joined()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // MARK: - HTTP
+
+    private func request(_ path: String, method: String, timeout: TimeInterval = 120) -> URLRequest {
+        var request = URLRequest(url: Self.base.appendingPathComponent(path), timeoutInterval: timeout)
+        request.httpMethod = method
+        request.setValue(key, forHTTPHeaderField: "x-goog-api-key")
+        return request
+    }
+
+    private func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try check(data, response)
+        return (data, response as! HTTPURLResponse)
+    }
+
+    private func check(_ data: Data, _ response: URLResponse) throws {
+        guard let http = response as? HTTPURLResponse else { throw Failure(message: "No reply from Gemini.") }
+        guard !(200..<300).contains(http.statusCode) else { return }
+        // The error comes as {"error": {...}}, or (from the Interactions API) as [{"error": {...}}].
+        let json = try? JSONSerialization.jsonObject(with: data)
+        let body = (json as? [String: Any]) ?? (json as? [[String: Any]])?.first
+        let message = (body?["error"] as? [String: Any])?["message"] as? String
+        switch http.statusCode {
+        case 400 where message?.lowercased().contains("api key") == true, 401, 403:
+            throw Failure(message: "Gemini didn't accept the API key. Check it in Settings.")
+        case 429:
+            throw Failure(message: "Gemini's rate limit or quota was reached. Try again in a while.")
+        default:
+            throw Failure(message: "Gemini error \(http.statusCode): \(message ?? "unknown")")
+        }
+    }
+}
