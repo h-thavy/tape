@@ -67,22 +67,19 @@ extension Color {
 
 // MARK: - Mark
 
-/// Tape's mark: a cute cassette whose reels are its eyes. Same geometry as scripts/make-icon.swift, which
-/// renders the app icon.
+/// Tape's mark: a cassette. Same geometry as scripts/make-icon.swift, which renders the app icon.
 enum TapeMark {
     struct Shape {
         /// The body with its window and the notch cut out (fill even-odd).
         var body = CGMutablePath()
         var window = CGMutablePath()
-        var eyes = CGMutablePath()
-        var shine = CGMutablePath()
-        /// Stroked, `smileWidth` wide, with round caps.
-        var smile = CGMutablePath()
-        var smileWidth: CGFloat = 0
-        var blush = CGMutablePath()
+        /// The reels as rings (fill even-odd).
+        var reels = CGMutablePath()
+        /// The teeth of the reels' hubs.
+        var teeth = CGMutablePath()
     }
 
-    /// The character in `box` (a square, y-up).
+    /// The cassette in `box` (a square, y-up).
     static func shape(in box: CGRect) -> Shape {
         let s = box.width / 1024
         func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: box.minX + x * s, y: box.minY + y * s) }
@@ -90,44 +87,37 @@ enum TapeMark {
             CGRect(origin: p(x, y), size: CGSize(width: w * s, height: h * s))
         }
         var m = Shape()
-        m.window.addRoundedRect(in: r(232, 436, 560, 250), cornerWidth: 96 * s, cornerHeight: 96 * s)
-        m.body.addRoundedRect(in: r(112, 262, 800, 540), cornerWidth: 170 * s, cornerHeight: 170 * s)
+        m.window.addRoundedRect(in: r(236, 472, 552, 196), cornerWidth: 44 * s, cornerHeight: 44 * s)
+        m.body.addRoundedRect(in: r(104, 288, 816, 488), cornerWidth: 76 * s, cornerHeight: 76 * s)
         m.body.addPath(m.window)
-        // The notch along the bottom edge (its little feet), rounded like the rest.
-        m.body.move(to: p(338, 262))
-        m.body.addCurve(to: p(392, 332), control1: p(358, 262), control2: p(372, 332))
-        m.body.addLine(to: p(632, 332))
-        m.body.addCurve(to: p(686, 262), control1: p(652, 332), control2: p(666, 262))
+        // The notch along the bottom edge, where the tape meets the head.
+        m.body.move(to: p(316, 288)); m.body.addLine(to: p(360, 356)); m.body.addLine(to: p(664, 356)); m.body.addLine(to: p(708, 288))
         m.body.closeSubpath()
-        for cx: CGFloat in [382, 642] {
-            m.eyes.addEllipse(in: r(cx - 78, 572 - 78, 156, 156))
-            m.shine.addEllipse(in: r(cx - 46, 582, 46, 46))
-            m.shine.addEllipse(in: r(cx + 18, 524, 22, 22))
+        let cy: CGFloat = 570
+        for cx: CGFloat in [374, 650] {
+            m.reels.addEllipse(in: r(cx - 66, cy - 66, 132, 132))
+            m.reels.addEllipse(in: r(cx - 36, cy - 36, 72, 72))
+            for k in 0..<6 {
+                let angle = CGFloat(k) * .pi / 3 + .pi / 6
+                let tooth = CGRect(x: -7 * s, y: 18 * s, width: 14 * s, height: 22 * s)
+                var t = CGAffineTransform(translationX: p(cx, cy).x, y: p(cx, cy).y).rotated(by: angle)
+                m.teeth.addPath(CGPath(roundedRect: tooth, cornerWidth: 4 * s, cornerHeight: 4 * s, transform: &t))
+            }
         }
-        m.smile.move(to: p(482, 512))
-        m.smile.addQuadCurve(to: p(542, 512), control: p(512, 478))
-        m.smileWidth = 20 * s
-        for cx: CGFloat in [262, 762] { m.blush.addEllipse(in: r(cx - 54, 370, 108, 52)) }
         return m
     }
 
-    /// The menu bar icon: the character in the menu bar's own ink (it follows light and dark menu bars), with a
+    /// The menu bar icon: the cassette in the menu bar's own ink (it follows light and dark menu bars), with a
     /// red dot while recording (grey while you're muted in the call).
     static func menuBarImage(recording: Bool = false, muted: Bool = false) -> NSImage {
         let image = NSImage(size: NSSize(width: 26, height: 18), flipped: false) { rect in
             guard let cg = NSGraphicsContext.current?.cgContext else { return false }
-            let m = shape(in: CGRect(x: rect.midX - 12.5, y: rect.midY - 12.6, width: 25, height: 25))
+            let m = shape(in: CGRect(x: rect.midX - 12.5, y: rect.midY - 13, width: 25, height: 25))
             cg.setFillColor(NSColor.labelColor.cgColor)
             cg.addPath(m.body)
             cg.fillPath(using: .evenOdd)
-            cg.addPath(m.eyes)
-            cg.fillPath()
-            // A bolder smile, so it shows at this size.
-            cg.addPath(m.smile)
-            cg.setStrokeColor(NSColor.labelColor.cgColor)
-            cg.setLineWidth(1.2)
-            cg.setLineCap(.round)
-            cg.strokePath()
+            cg.addPath(m.reels)
+            cg.fillPath(using: .evenOdd)
             if recording {
                 let dot = CGRect(x: rect.maxX - 7, y: rect.maxY - 7, width: 7, height: 7)
                 cg.setFillColor(NSColor.windowBackgroundColor.cgColor)
@@ -150,14 +140,10 @@ struct TapeMarkView: View {
         Canvas { context, canvasSize in
             let m = TapeMark.shape(in: CGRect(origin: .zero, size: canvasSize))
             let flip = CGAffineTransform(translationX: 0, y: canvasSize.height).scaledBy(x: 1, y: -1)
-            let ink = Color(hex: 0x1A1A1A)
-            context.fill(Path(m.window).applying(flip), with: .color(Color(hex: 0xF4E1FF)))
-            context.fill(Path(m.body).applying(flip), with: .color(ink), style: FillStyle(eoFill: true))
-            context.fill(Path(m.blush).applying(flip), with: .color(Color(hex: 0xFF8FB1).opacity(0.85)))
-            context.fill(Path(m.eyes).applying(flip), with: .color(ink))
-            context.fill(Path(m.shine).applying(flip), with: .color(.white))
-            context.stroke(Path(m.smile).applying(flip), with: .color(ink),
-                           style: StrokeStyle(lineWidth: max(1, m.smileWidth), lineCap: .round))
+            context.fill(Path(m.window).applying(flip), with: .color(Theme.accent))
+            context.fill(Path(m.body).applying(flip), with: .color(Theme.ink), style: FillStyle(eoFill: true))
+            context.fill(Path(m.reels).applying(flip), with: .color(Theme.ink), style: FillStyle(eoFill: true))
+            if canvasSize.width >= 48 { context.fill(Path(m.teeth).applying(flip), with: .color(Theme.ink)) }
         }
         .frame(width: size, height: size)
         .accessibilityHidden(true)
