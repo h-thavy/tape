@@ -12,14 +12,6 @@ enum APIKeys {
             case .anthropic: "Anthropic API key"
             }
         }
-
-        /// Where to make one.
-        var consoleURL: URL {
-            switch self {
-            case .gemini: URL(string: "https://aistudio.google.com/apikey")!
-            case .anthropic: URL(string: "https://console.anthropic.com/settings/keys")!
-            }
-        }
     }
 
     private static let keychainService = "io.github.h-thavy.tape"

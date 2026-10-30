@@ -160,9 +160,7 @@ private struct KeyRow: View {
                         .onSubmit(save)
                     Button("Save", action: save).buttonStyle(.pill).controlSize(.small)
                         .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
-                    if saved == nil {
-                        Button("Get a key") { NSWorkspace.shared.open(service.consoleURL) }.buttonStyle(.pillQuiet).controlSize(.small)
-                    } else {
+                    if saved != nil {
                         Button("Cancel") { editing = false; draft = "" }.buttonStyle(.pillQuiet).controlSize(.small)
                     }
                 }

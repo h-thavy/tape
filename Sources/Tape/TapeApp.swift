@@ -39,6 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.appearance = Appearance.current.nsAppearance
+        NSApp.mainMenu = Self.mainMenu()
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         let menu = NSMenu()
         menu.delegate = self
@@ -79,6 +80,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             Processor.shared.resume()
         }
     }
+
+    /// The app's menu bar. The Edit menu is what makes ⌘V, ⌘C, ⌘X and ⌘A work in text fields (pasting an API
+    /// key): macOS sends those shortcuts through it.
+    private static func mainMenu() -> NSMenu {
+        let main = NSMenu()
+        func submenu(_ title: String, _ items: [NSMenuItem]) {
+            let menu = NSMenu(title: title)
+            items.forEach(menu.addItem)
+            let holder = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            holder.submenu = menu
+            main.addItem(holder)
+        }
+        func item(_ title: String, _ action: Selector, _ key: String, _ modifiers: NSEvent.ModifierFlags = .command) -> NSMenuItem {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+            item.keyEquivalentModifierMask = modifiers
+            return item
+        }
+        let settings = item("Settings…", #selector(AppDelegate.openSettings), ",")
+        submenu("Tape", [
+            item("About Tape", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), ""),
+            .separator(), settings, .separator(),
+            item("Hide Tape", #selector(NSApplication.hide(_:)), "h"),
+            item("Hide Others", #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option]),
+            item("Show All", #selector(NSApplication.unhideAllApplications(_:)), ""),
+            .separator(),
+            item("Quit Tape", #selector(AppDelegate.quit), "q"),
+        ])
+        submenu("Edit", [
+            item("Undo", Selector(("undo:")), "z"),
+            item("Redo", Selector(("redo:")), "z", [.command, .shift]),
+            .separator(),
+            item("Cut", #selector(NSText.cut(_:)), "x"),
+            item("Copy", #selector(NSText.copy(_:)), "c"),
+            item("Paste", #selector(NSText.paste(_:)), "v"),
+            item("Select All", #selector(NSText.selectAll(_:)), "a"),
+        ])
+        submenu("Window", [
+            item("Minimize", #selector(NSWindow.performMiniaturize(_:)), "m"),
+            item("Close", #selector(NSWindow.performClose(_:)), "w"),
+        ])
+        return main
+    }
+
+    @objc func openSettings() { MainWindow.shared.show(page: .settings) }
 
     /// Clicking the Dock icon with the window closed opens it again.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -238,7 +283,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSWorkspace.shared.open(Recordings.folder)
     }
 
-    @objc private func quit() {
+    @objc fileprivate func quit() {
         if recorder.isRecording {
             recorder.stop()
             Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
