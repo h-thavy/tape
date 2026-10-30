@@ -29,7 +29,9 @@ curl -fsSL https://raw.githubusercontent.com/h-thavy/tape/main/scripts/install.s
 - **Asks when a call starts.** Zoom, Teams, FaceTime, Webex, Google Meet or any call in a browser, Slack
   huddles, Discord, WhatsApp, Telegram, Signal… and any other app that uses the microphone and plays audio at
   the same time for 3 seconds. The camera notch grows into a "Meeting detected" island (also over full-screen
-  calls; on a Mac without a notch it drops from the top edge). Or turn on *Record calls without asking*.
+  calls; on a Mac without a notch it drops from the top edge), with the platform's icon: the call app's own,
+  or for a call in a browser, the platform's (its desktop app's when installed, else its web icon, fetched
+  once). Or turn on *Record calls without asking*.
 - **Lives in the notch.** Hover over the notch for quick actions: record, import, open Tape, the latest
   recording. While recording, the notch shows the time and your mic's level (a crossed-out mic while you're
   muted). Drag recordings to the notch to import them. The island stays off screen shares and screen

@@ -19,6 +19,8 @@ final class Toast {
     struct Card {
         let id: String
         var symbol = "waveform"
+        /// Shown instead of the symbol: the call platform's icon.
+        var image: NSImage?
         let title: String
         /// In monospaced type after the title ("42:10").
         var detail: String?
@@ -135,7 +137,7 @@ final class Toast {
 
     /// Debug: each kind of card drawn into a PNG, open, under a notch like a 14" MacBook Pro's.
     static func snapshots(to folder: URL) {
-        let cards: [(String, Card)] = [
+        var cards: [(String, Card)] = [
             ("island-meeting", Card(id: "call", symbol: "video", title: "Meeting detected", message: "Google Meet in Opera GX",
                                     primary: .init(title: "Record", symbol: "record.circle") {}, secondary: .init(title: "Not now") {},
                                     timeout: nil, attention: true)),
@@ -145,6 +147,12 @@ final class Toast {
             ("island-recap", Card(id: "recap", symbol: "doc.text", title: "Recap ready", message: "AI-Powered CV Automation · 6 topics",
                                   primary: .init(title: "Open") {})),
         ]
+        var teams = cards[0].1
+        teams.image = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.microsoft.teams2")
+            .map { NSWorkspace.shared.icon(forFile: $0.path) } ?? NSWorkspace.shared.icon(forFile: "/System/Applications/FaceTime.app")
+        teams = Card(id: "call", symbol: "video", image: teams.image, title: "Meeting detected", message: "Microsoft Teams",
+                     primary: teams.primary, secondary: teams.secondary, timeout: nil, attention: true)
+        cards.append(("island-meeting-teams", teams))
         let meeting = cards[0].1
         let glows: [(String, Card, Double?)] = cards.map { ($0.0, $0.1, nil) }
             + [0.15, 0.35, 0.55, 0.75, 0.95, 1.1, 1.25].enumerated().map { ("island-glow-\($0.offset + 1)", meeting, $0.element) }
@@ -356,10 +364,17 @@ private struct IslandView: View {
 
     private var content: some View {
         HStack(spacing: 12) {
-            RoundedRectangle(cornerRadius: 9).fill(Theme.Island.tile)
-                .overlay(Image(systemName: card.symbol).font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.Island.text))
-                .frame(width: 34, height: 34)
-                .accessibilityHidden(true)
+            Group {
+                if let image = card.image {
+                    Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit)
+                        .frame(width: 34, height: 34)
+                } else {
+                    RoundedRectangle(cornerRadius: 9).fill(Theme.Island.tile)
+                        .overlay(Image(systemName: card.symbol).font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.Island.text))
+                }
+            }
+            .frame(width: 34, height: 34)
+            .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 titleLine
                 if let message = card.message {

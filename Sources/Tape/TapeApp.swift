@@ -143,6 +143,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             watcher.start()
             Processor.shared.resume()
+            PlatformIcons.prefetch()
             UpdateChecker.shared.start()
             NotchBar.shared.start()
         }
@@ -228,7 +229,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // isn't left unrecorded because the card went by unseen.
         if Settings.chime { Self.chime?.play() }
         Toast.shared.show(.init(
-            id: "call", symbol: "video", title: "Meeting detected", message: call.name,
+            id: "call", symbol: "video", image: PlatformIcons.icon(for: call), title: "Meeting detected", message: call.name,
             primary: .init(title: "Record", symbol: "record.circle") { [weak self] in
                 guard let self, !self.recorder.isRecording else { return }
                 self.recorder.start(call: self.watcher.current ?? call, followsCall: true)

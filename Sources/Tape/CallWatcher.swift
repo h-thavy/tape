@@ -19,6 +19,10 @@ final class CallWatcher: ObservableObject {
         let name: String
         let bundleID: String
         let pid: pid_t
+        /// The meeting platform, when it can be told (Teams in Opera → Microsoft Teams).
+        var platform: CallPlatform?
+        /// In a browser (so its icon isn't the platform's).
+        var inBrowser = false
     }
 
     var onStart: ((Call) -> Void)?
@@ -51,7 +55,8 @@ final class CallWatcher: ObservableObject {
             lastSeenHost = HostClock.now
             guard current?.bundleID != found.bundleID else { return }
             if let ended = current { onEnd?(ended, lastSeenHost) }
-            let call = Call(name: Self.displayName(found), bundleID: found.bundleID, pid: found.pid)
+            let (name, platform) = Self.describe(found)
+            let call = Call(name: name, bundleID: found.bundleID, pid: found.pid, platform: platform, inBrowser: found.app?.kind == .browser)
             current = call
             log.notice("Call started: \(call.name, privacy: .public) (\(call.bundleID, privacy: .public))")
             onStart?(call)
@@ -97,19 +102,19 @@ final class CallWatcher: ObservableObject {
             .compactMap(CallRules.meetingTitle(fromWindowTitle:)).first
     }
 
-    /// The meeting platform when it can be told (a meeting app, or a browser window titled like a call), else
-    /// the app's name.
-    private static func displayName(_ found: Found) -> String {
+    /// The call's name, the meeting platform when it can be told (a meeting app, or a browser window titled
+    /// like a call), else the app's name; and that platform.
+    private static func describe(_ found: Found) -> (String, CallPlatform?) {
         let appName = found.app?.name
             ?? NSRunningApplication(processIdentifier: found.pid)?.localizedName ?? found.bundleID
-        if let platform = found.app?.platform { return platform.title }
-        guard AXIsProcessTrusted() else { return appName }
+        if let platform = found.app?.platform { return (platform.title, platform) }
+        guard AXIsProcessTrusted() else { return (appName, nil) }
         let titles = AXAllWindows.windows(pid: found.pid).compactMap { AXAllWindows.attribute($0, kAXTitleAttribute) }
         let isSlack = found.bundleID.lowercased() == "com.tinyspeck.slackmacgap"
         if let platform = titles.lazy.compactMap({ CallRules.platform(forWindowTitle: $0, isSlack: isSlack) }).first {
-            return found.app?.kind == .browser ? "\(platform.title) in \(appName)" : platform.title
+            return (found.app?.kind == .browser ? "\(platform.title) in \(appName)" : platform.title, platform)
         }
-        return appName
+        return (appName, nil)
     }
 }
 
