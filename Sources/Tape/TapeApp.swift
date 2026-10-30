@@ -1,3 +1,4 @@
+import AVFoundation
 import AppKit
 import ServiceManagement
 import os
@@ -139,12 +140,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if recorder.isRecording { log.notice("Quit while recording") }
     }
 
-    /// Asks for everything Tape needs once, up front, so no prompt appears in the middle of a call.
+    /// Asks for what Tape needs up front, so no prompt appears in the middle of a call: on the first launch,
+    /// and again whenever a permission hasn't been decided yet (after an update signed differently, macOS
+    /// treats Tape as new).
     private func firstLaunch() async {
+        if AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined { _ = await Permissions.requestMicrophone() }
+        if Permissions.systemAudio == nil { _ = await Permissions.requestSystemAudio() }
         guard !UserDefaults.standard.bool(forKey: "setUp") else { return }
         UserDefaults.standard.set(true, forKey: "setUp")
-        _ = await Permissions.requestMicrophone()
-        if Permissions.systemAudio != true { _ = await Permissions.requestSystemAudio() }
         if !Permissions.accessibility { Permissions.requestAccessibility() }
         try? SMAppService.mainApp.register()
         SettingsModel.shared.openAtLogin = SMAppService.mainApp.status == .enabled
