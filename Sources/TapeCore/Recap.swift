@@ -21,6 +21,30 @@ public enum RecapPrompts {
         transcript only.
         """
 
+    /// For one part of a long recording (sent in parts: Gemini fails on long audio in one go). Times are
+    /// written from the start of the part and moved onto the whole recording's clock afterwards.
+    public static func transcription(part: Int, of count: Int, previous: String?) -> String {
+        var text = transcription + """
+
+
+            This is part \(part) of \(count) of a longer recording. Write the times from the start of this part \
+            ([00:00] is where this part begins). Reply with transcript lines only, each starting with its time: \
+            no introduction, notes or comments.
+            """
+        if let previous, !previous.isEmpty {
+            text += """
+
+
+                The previous part ended like this. Use the same speaker labels for the same voices, without \
+                explaining or discussing the labels, and don't repeat these lines:
+                <previous>
+                \(previous)
+                </previous>
+                """
+        }
+        return text
+    }
+
     /// For Claude: the recap's shape and the rules for writing it.
     public static let recapSystem = """
         You turn meeting transcripts into recaps, for the people who were in the meeting and for colleagues who \
@@ -44,10 +68,12 @@ public enum RecapPrompts {
         they came up. If the recording's name doesn't match what was discussed, say so.>
 
         ## 1. <First topic>
+        <!-- at <MM:SS where this topic starts in the transcript> -->
 
         - **<Lead-in>:** <what was said, decided or asked, and why>
 
         ## 2. <Next topic>
+        <!-- at <MM:SS> -->
 
         …
 
@@ -56,6 +82,9 @@ public enum RecapPrompts {
         - <Owner (role or name)>: <action>
 
         How to write it:
+        - Right under each numbered heading, put the time where that topic starts, taken from the \
+        transcript's timestamps, as an HTML comment: `<!-- at 17:28 -->` (`<!-- at 1:02:10 -->` after the first \
+        hour). It's hidden when the Markdown is shown; the app uses it to link the topic to the recording.
         - One numbered section per real topic, in the order discussed. Put small leftover items in a last \
         section called "Other".
         - Start each bullet with a short bold lead-in naming the point ("**Decision:**", "**Payroll bug:**", \
@@ -158,5 +187,65 @@ public enum MarkdownBlock: Equatable {
         }
         flush()
         return blocks
+    }
+}
+
+/// A recap split the way the app shows it: the source line, the opening paragraphs, then each topic with its
+/// number and where it starts in the recording.
+public struct RecapDocument: Equatable {
+    public struct Section: Equatable {
+        /// "1" for "## 1. Pricing"; nil for an unnumbered one ("Next steps").
+        public let number: String?
+        public let title: String
+        /// From the `<!-- at 12:34 -->` line under the heading.
+        public let time: Double?
+        public let blocks: [MarkdownBlock]
+    }
+
+    public let title: String?
+    /// The "Source: …" line.
+    public let source: String?
+    public let intro: [MarkdownBlock]
+    public let sections: [Section]
+
+    public init(_ markdown: String) {
+        let marker = try! NSRegularExpression(pattern: #"^<!--\s*at\s+((?:\d+:)?\d{1,2}:\d{2})\s*-->$"#)
+        var title: String?
+        var source: String?
+        var intro: [MarkdownBlock] = []
+        var sections: [Section] = []
+        var current: (number: String?, title: String, time: Double?, blocks: [MarkdownBlock])?
+        func close() {
+            if let current { sections.append(Section(number: current.number, title: current.title, time: current.time, blocks: current.blocks)) }
+            current = nil
+        }
+        for block in MarkdownBlock.parse(markdown) {
+            switch block {
+            case .heading(1, let text) where title == nil && current == nil && intro.isEmpty:
+                title = text
+            case .heading(let level, let text) where level <= 2:
+                close()
+                if let dot = text.firstIndex(of: "."), !text[..<dot].isEmpty, text[..<dot].allSatisfy(\.isNumber) {
+                    current = (String(text[..<dot]), text[text.index(after: dot)...].trimmingCharacters(in: .whitespaces), nil, [])
+                } else {
+                    current = (nil, text, nil, [])
+                }
+            case .paragraph(let text) where text.hasPrefix("<!--"):
+                // The topic's time (hidden when the Markdown is shown elsewhere).
+                if let match = marker.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+                   let range = Range(match.range(at: 1), in: text), current != nil, current?.time == nil {
+                    current?.time = Transcript.seconds(String(text[range]))
+                }
+            case .paragraph(let text) where current == nil && source == nil && text.hasPrefix("Source:"):
+                source = String(text.dropFirst("Source:".count)).trimmingCharacters(in: .whitespaces)
+            default:
+                if current != nil { current?.blocks.append(block) } else { intro.append(block) }
+            }
+        }
+        close()
+        self.title = title
+        self.source = source
+        self.intro = intro
+        self.sections = sections
     }
 }

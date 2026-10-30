@@ -1,19 +1,22 @@
 import AppKit
 import SwiftUI
 
-/// The app window and which page it shows. Closing the window leaves Tape running in the menu bar, still
-/// listening for calls.
+/// The app window and what it shows. Closing the window leaves Tape running in the menu bar (and the notch),
+/// still listening for calls.
 @MainActor
 final class MainWindow: ObservableObject {
     static let shared = MainWindow()
 
     enum Page { case recordings, settings }
+    enum Tab { case recap, transcript }
 
     @Published var page: Page = .recordings
-    /// The recording open on the Recordings page (nil: the list).
+    /// The recording open in the reader (nil: the newest).
     @Published var selected: String?
     /// The recording whose name is being typed (its title becomes a field).
     @Published var renaming: String?
+    @Published var search = ""
+    @Published var tab: Tab = .recap
     private var window: NSWindow?
 
     func show(recording: String? = nil, page: Page = .recordings, rename: Bool = false) {
@@ -28,31 +31,38 @@ final class MainWindow: ObservableObject {
         if !rename { DispatchQueue.main.async { window.makeFirstResponder(nil) } }
     }
 
-    /// Debug hook: TAPE_SNAPSHOT=<folder> saves the window's pages there as PNGs (list, first recording,
-    /// settings), for checking the layout without screen-recording permission.
+    /// Debug hook: TAPE_SNAPSHOT=<folder> saves the window's pages there as PNGs (the newest recording's recap
+    /// and transcript, settings), the onboarding's steps and the notch island's states, for checking the
+    /// layout without screen recording.
     func snapshotIfAsked() {
-        guard let folder = ProcessInfo.processInfo.environment["TAPE_SNAPSHOT"] else { return }
+        guard let folder = ProcessInfo.processInfo.environment["TAPE_SNAPSHOT"].map({ URL(fileURLWithPath: $0) }) else { return }
         let first = Library.shared.items.first(where: { $0.status == .ready })?.id ?? Library.shared.items.first?.id
         let steps: [(String, () -> Void)] = [
-            ("recordings", { self.page = .recordings; self.selected = nil }),
-            ("recording", { self.page = .recordings; self.selected = first }),
-            ("settings", { self.page = .settings }),
+            ("recap", { self.page = .recordings; self.selected = first; self.tab = .recap }),
+            ("transcript", { self.page = .recordings; self.selected = first; self.tab = .transcript }),
+            ("settings", { self.page = .settings; self.tab = .recap }),
         ]
         Task { @MainActor in
-            for (name, step) in steps {
-                step()
-                try? await Task.sleep(for: .seconds(1.2))
-                guard let view = window?.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { continue }
-                view.cacheDisplay(in: view.bounds, to: rep)
-                try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: folder).appendingPathComponent("\(name).png"))
+            for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+                window?.appearance = NSAppearance(named: appearance)
+                let suffix = appearance == .aqua ? "" : "-dark"
+                for (name, step) in steps {
+                    step()
+                    try? await Task.sleep(for: .seconds(1.2))
+                    if let view = window?.contentView { Snapshot.write(view, to: folder.appendingPathComponent("\(name)\(suffix).png")) }
+                }
             }
-            self.page = .recordings
-            self.selected = nil
+            window?.appearance = nil
+            page = .recordings
+            Onboarding.snapshot(to: folder)
+            Toast.snapshots(to: folder)
+            NotchBar.snapshots(to: folder)
+            NSApp.terminate(nil)
         }
     }
 
     private func makeWindow() -> NSWindow {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1080, height: 720),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 780),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                               backing: .buffered, defer: false)
         window.title = "Tape"
@@ -60,7 +70,7 @@ final class MainWindow: ObservableObject {
         window.titleVisibility = .hidden
         window.titlebarSeparatorStyle = .none
         window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: 860, height: 560)
+        window.minSize = NSSize(width: 900, height: 580)
         window.contentView = NSHostingView(rootView: RootView())
         window.setFrameAutosaveName("TapeMainWindow")
         if !window.setFrameUsingName("TapeMainWindow") { window.center() }
@@ -68,171 +78,128 @@ final class MainWindow: ObservableObject {
     }
 }
 
-/// A 52 pt title strip shared with the traffic lights, then the sidebar on the warm frame and the page on a
-/// rounded panel (24 pt corners on top, 16 at the bottom).
+/// A view drawn into a PNG.
+enum Snapshot {
+    @MainActor static func write(_ view: NSView, to url: URL) {
+        view.layoutSubtreeIfNeeded()
+        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+        view.cacheDisplay(in: view.bounds, to: rep)
+        try? rep.representation(using: .png, properties: [:])?.write(to: url)
+    }
+}
+
+/// The title bar across the top (with the traffic lights), the library on the left, and on the right the
+/// reader (or Settings).
 private struct RootView: View {
     @ObservedObject private var main = MainWindow.shared
 
-    private let panel = UnevenRoundedRectangle(topLeadingRadius: 24, bottomLeadingRadius: 16,
-                                               bottomTrailingRadius: 16, topTrailingRadius: 24)
-
     var body: some View {
         VStack(spacing: 0) {
-            Color.clear.frame(height: 52)
+            TitleBar()
+            Rectangle().fill(Theme.line).frame(height: 1)
             HStack(spacing: 0) {
-                Sidebar().frame(width: 216)
+                LibraryColumn().frame(width: 320)
+                Rectangle().fill(Theme.line).frame(width: 1)
                 Group {
                     switch main.page {
-                    case .recordings: RecordingsPage()
+                    case .recordings: ReaderPane()
                     case .settings: SettingsPage()
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(panel.fill(Theme.page))
-                .clipShape(panel)
-                .overlay(panel.strokeBorder(Theme.border))
-                .padding(.trailing, 8)
-                .padding(.bottom, 8)
+                .background(Theme.background)
             }
         }
         .ignoresSafeArea()
-        .background(Theme.frame)
-        .font(Theme.sans(15))
+        .background(Theme.background)
+        .font(Theme.sans(14))
         .foregroundStyle(Theme.ink)
+        .tint(Theme.accent)
     }
 }
 
-private struct Sidebar: View {
+/// The wordmark, search, what Tape is doing, Record, and Settings.
+private struct TitleBar: View {
     @ObservedObject private var main = MainWindow.shared
     @ObservedObject private var recorder = Recorder.shared
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                TapeMarkView(size: 30)
-                Text("Tape").font(Theme.serif(26))
-            }
-            .padding(.horizontal, 5).padding(.vertical, 4)
-            .padding(.bottom, 16)
-
-            NavItem(title: "Recordings", icon: "waveform", selected: main.page == .recordings,
-                    badge: recorder.isRecording ? "REC" : nil) {
-                main.page = .recordings
-                main.selected = nil
-            }
-
-            Spacer(minLength: 0)
-
-            UpdateCard()
-            StatusCard()
-                .padding(.bottom, 8)
-            Divider().overlay(Theme.border)
-                .padding(.bottom, 8)
-            NavItem(title: "Settings", icon: "gearshape", selected: main.page == .settings) {
-                main.page = .settings
-            }
-        }
-        .padding(12)
-    }
-}
-
-private struct NavItem: View {
-    let title: String
-    let icon: String
-    let selected: Bool
-    var badge: String?
-    let action: () -> Void
-    @State private var hovering = false
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: icon).font(.system(size: 16)).frame(width: 20, height: 20)
-                Text(title).font(Theme.sans(15, .medium))
-                Spacer()
-                if let badge {
-                    Text(badge).font(Theme.sans(10, .bold)).foregroundStyle(.white)
-                        .padding(.horizontal, 5).padding(.vertical, 1)
-                        .background(Capsule().fill(Theme.recording))
-                }
-            }
-            .foregroundStyle(Theme.ink)
-            .padding(8)
-            .frame(maxWidth: .infinity)
-            .background(RoundedRectangle(cornerRadius: 6).fill(selected || hovering ? Theme.buttonFill : .clear))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plainPointer)
-        .onHover { hovering = $0 }
-        .animation(.easeOut(duration: 0.15), value: hovering)
-    }
-}
-
-/// A newer Tape is on GitHub: one click to update.
-private struct UpdateCard: View {
-    @ObservedObject private var updates = UpdateChecker.shared
-
-    var body: some View {
-        switch updates.state {
-        case .available(let version), .waiting(let version), .downloading(let version, _), .installing(let version):
-            VStack(alignment: .leading, spacing: 8) {
-                Label("Tape \(version) is ready", systemImage: "arrow.down.circle").font(Theme.sans(12.5, .semibold))
-                if case .available = updates.state {
-                    Button("Update") { updates.update() }.buttonStyle(.pill).controlSize(.small)
-                } else {
-                    Text(updates.state == .waiting(version) ? "After this recording" : "Updating…")
-                        .font(Theme.sans(11.5)).foregroundStyle(Theme.inkTertiary)
-                }
-            }
-            .foregroundStyle(Theme.onAccent)
-            .padding(.horizontal, 14).padding(.vertical, 12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 6).fill(Theme.accent))
-            .padding(.bottom, 4)
-        default:
-            EmptyView()
-        }
-    }
-}
-
-/// Bottom of the sidebar: what Tape is doing (recording, or listening for calls), or what needs setting up.
-private struct StatusCard: View {
-    @ObservedObject private var recorder = Recorder.shared
     @ObservedObject private var settings = SettingsModel.shared
+    @ObservedObject private var updates = UpdateChecker.shared
+    @ObservedObject private var calls = CallWatcher.shared
+    @FocusState private var searching: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if recorder.isRecording, let started = recorder.startedAt {
-                HStack(spacing: 8) {
-                    Circle().fill(Theme.recording).frame(width: 8, height: 8)
-                    TimelineView(.periodic(from: .now, by: 1)) { context in
-                        Text("Recording · \(Self.clock(context.date.timeIntervalSince(started)))")
-                            .font(Theme.sans(12.5, .semibold)).monospacedDigit()
+        HStack(spacing: 12) {
+            // Room for the traffic lights.
+            Color.clear.frame(width: 62, height: 1)
+            Wordmark().accessibilityElement(children: .ignore).accessibilityLabel("Tape")
+            SearchField(prompt: "Search meetings", text: $main.search, focused: $searching)
+                .frame(width: 300).padding(.leading, 18)
+                .accessibilityLabel("Search meetings")
+            // ⌘K: to the search box.
+            Button("") { searching = true }.keyboardShortcut("k").opacity(0).frame(width: 0).accessibilityHidden(true)
+            Spacer()
+            if let version = updates.availableVersion {
+                Button { updates.update() } label: { Label("Update to \(version)", systemImage: "arrow.down.circle") }
+                    .buttonStyle(.pillQuiet).controlSize(.small)
+            }
+            status
+            if recorder.isRecording {
+                Button { recorder.stop() } label: {
+                    HStack(spacing: 7) {
+                        RoundedRectangle(cornerRadius: 2).fill(Theme.onInk).frame(width: 8, height: 8)
+                        Text("Stop and save")
                     }
                 }
-                if recorder.isMuted {
-                    Text("Muted in the call: your mic is left out").font(Theme.sans(11.5)).foregroundStyle(Theme.inkTertiary)
-                }
-                Button("Stop and save") { recorder.stop() }.buttonStyle(.pillQuiet).controlSize(.small)
-            } else if !settings.hasKeys {
-                Label("Recaps need API keys", systemImage: "key").font(Theme.sans(12.5, .semibold))
-                Button("Add in Settings") { MainWindow.shared.page = .settings }.buttonStyle(.pill).controlSize(.small)
+                .buttonStyle(.pill)
+                .keyboardShortcut("r", modifiers: [.command, .shift])
             } else {
-                HStack(spacing: 8) {
-                    Circle().fill(Theme.success).frame(width: 7, height: 7)
-                    Text("Listening for calls").font(Theme.sans(12.5, .medium)).foregroundStyle(Theme.ink)
+                Button {
+                    recorder.start(call: calls.current, followsCall: calls.current != nil)
+                } label: {
+                    HStack(spacing: 7) {
+                        Circle().fill(Theme.recording).frame(width: 8, height: 8)
+                        Text("Record")
+                    }
                 }
-                Text("Tape asks when a call starts.").font(Theme.sans(11.5)).foregroundStyle(Theme.inkTertiary)
+                .buttonStyle(.pill)
+                .keyboardShortcut("r", modifiers: [.command, .shift])
+                .help("Start recording (⇧⌘R)")
             }
+            IconButton(systemImage: main.page == .settings ? "xmark" : "gearshape", help: main.page == .settings ? "Close Settings" : "Settings",
+                       box: 32, icon: 15) {
+                main.page = main.page == .settings ? .recordings : .settings
+            }
+            .accessibilityLabel(main.page == .settings ? "Close Settings" : "Settings")
         }
-        .foregroundStyle(Theme.inkSecondary)
-        .padding(.horizontal, 14).padding(.vertical, 12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 6).fill(Theme.mutedCard))
+        .padding(.trailing, 16)
+        .frame(height: 56)
     }
 
-    static func clock(_ seconds: TimeInterval) -> String {
-        let s = Int(seconds)
-        return s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, s % 3600 / 60, s % 60) : String(format: "%d:%02d", s / 60, s % 60)
+    /// Listening, on a call, recording (with the time), or what's missing.
+    @ViewBuilder private var status: some View {
+        HStack(spacing: 8) {
+            if recorder.isRecording, let started = recorder.startedAt {
+                Circle().fill(Theme.recording).frame(width: 7, height: 7)
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    Text(Counter.text(context.date.timeIntervalSince(started))).font(Theme.mono(12.5, .medium)).foregroundStyle(Theme.ink)
+                }
+                Text(recorder.isMuted ? "Muted: your mic is left out" : "Recording").font(Theme.sans(12.5, .medium)).foregroundStyle(Theme.ink2)
+            } else if !settings.hasKeys {
+                Image(systemName: "key").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.working)
+                Button { main.page = .settings } label: {
+                    Text("Add API keys for recaps").font(Theme.sans(12.5, .medium)).foregroundStyle(Theme.ink2)
+                }
+                .buttonStyle(.plainPointer)
+            } else if let call = calls.current {
+                Circle().fill(Theme.ready).frame(width: 7, height: 7)
+                Text("On a call: \(call.name)").font(Theme.sans(12.5, .medium)).foregroundStyle(Theme.ink2).lineLimit(1)
+            } else {
+                Circle().strokeBorder(Theme.ink2, lineWidth: 1.5).frame(width: 8, height: 8)
+                Text("Listening for calls").font(Theme.sans(12.5, .medium)).foregroundStyle(Theme.ink2)
+            }
+        }
+        .padding(.horizontal, 12).frame(height: 32)
+        .overlay(Capsule().strokeBorder(Theme.line))
+        .accessibilityElement(children: .combine)
     }
 }

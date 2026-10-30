@@ -1,4 +1,6 @@
+import AVFoundation
 import Foundation
+import TapeCore
 import os
 
 /// Transcribes a recording with Gemini (`gemini-3.8-flash`, which handles Khmer mixed with English best):
@@ -13,16 +15,82 @@ struct Gemini {
 
     struct Failure: LocalizedError {
         let message: String
+        /// A failure on Gemini's side that may not happen again.
+        var retryable = false
         var errorDescription: String? { message }
     }
 
+    /// Recordings longer than this go in parts: Gemini fails on long audio in one go ("There was a problem
+    /// processing your request", every time, on a 32-minute call).
+    static let partLength: Double = 10 * 60
+
     func transcribe(_ audio: URL, prompt: String, progress: @escaping (String) -> Void) async throws -> String {
-        progress("Uploading the recording…")
+        let duration = (try? await AVURLAsset(url: audio).load(.duration).seconds) ?? 0
+        guard duration > Self.partLength * 1.2 else {
+            return try await withRetry { try await transcribeFile(audio, prompt: prompt, progress: progress) }
+        }
+        let count = Int((duration / Self.partLength).rounded(.up))
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("tape-parts-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        var transcript: [String] = []
+        for index in 0..<count {
+            let start = Double(index) * Self.partLength
+            let part = folder.appendingPathComponent("part \(index + 1).m4a")
+            try await Self.cut(audio, from: start, length: min(Self.partLength, duration - start), to: part)
+            // The end of the part before, so the same voices keep the same labels.
+            let previous = transcript.last.map { $0.components(separatedBy: "\n").suffix(12).joined(separator: "\n") }
+            let text = try await withRetry {
+                try await transcribeFile(part, prompt: RecapPrompts.transcription(part: index + 1, of: count, previous: previous)) { message in
+                    progress("Part \(index + 1) of \(count): \(message.lowercased())")
+                }
+            }
+            transcript.append(Transcript.shifted(Transcript.cleanedPart(text), by: start))
+            log.notice("Transcribed part \(index + 1) of \(count)")
+        }
+        return transcript.joined(separator: "\n\n")
+    }
+
+    private func transcribeFile(_ audio: URL, prompt: String, progress: @escaping (String) -> Void) async throws -> String {
+        progress("Uploading…")
         let file = try await upload(audio)
         defer { Task { try? await delete(file.name) } }
         try await waitUntilActive(file.name)
         progress("Transcribing…")
         return try await interact(prompt: prompt, fileURI: file.uri, mimeType: file.mimeType)
+    }
+
+    /// Tries again (twice, after 5 and 20 seconds) when Gemini fails on its side or the network drops; not
+    /// for a refused key or an exhausted quota.
+    private func withRetry(_ work: () async throws -> String) async throws -> String {
+        var attempt = 0
+        while true {
+            do {
+                return try await work()
+            } catch let failure as Failure where failure.retryable && attempt < 2 {
+                log.notice("Gemini failed (\(failure.message, privacy: .public)); trying again")
+            } catch let error as URLError where attempt < 2 {
+                log.notice("Network error (\(error.localizedDescription, privacy: .public)); trying again")
+            }
+            attempt += 1
+            try await Task.sleep(for: .seconds(attempt == 1 ? 5 : 20))
+        }
+    }
+
+    /// `length` seconds of `audio` from `start`, as an .m4a (copied as it is when it's AAC, else re-encoded).
+    private static func cut(_ audio: URL, from start: Double, length: Double, to output: URL) async throws {
+        let asset = AVURLAsset(url: audio)
+        let range = CMTimeRange(start: CMTime(seconds: start, preferredTimescale: 600), duration: CMTime(seconds: length, preferredTimescale: 600))
+        for preset in [AVAssetExportPresetPassthrough, AVAssetExportPresetAppleM4A] {
+            guard let export = AVAssetExportSession(asset: asset, presetName: preset) else { continue }
+            try? FileManager.default.removeItem(at: output)
+            export.outputURL = output
+            export.outputFileType = .m4a
+            export.timeRange = range
+            await export.export()
+            if export.status == .completed { return }
+        }
+        throw Failure(message: "Couldn't split the recording into parts for Gemini.")
     }
 
     // MARK: - Files API
@@ -121,7 +189,9 @@ struct Gemini {
             return text + "\n\n[The transcript stops here: the recording was too long to transcribe in one go.]"
         default:
             let errors = (interaction["errors"] as? [[String: Any]])?.compactMap { $0["message"] as? String }.joined(separator: " ")
-            throw Failure(message: "Gemini didn't finish the transcript (\(status)). \(errors ?? "")")
+            log.error("Interaction \(status, privacy: .public): \(errors ?? "", privacy: .public)")
+            throw Failure(message: "Gemini couldn't transcribe the recording (\(status): \(errors?.isEmpty == false ? errors! : "no reason given")).",
+                          retryable: status == "failed")
         }
     }
 
@@ -171,7 +241,7 @@ struct Gemini {
         case 429:
             throw Failure(message: "Gemini's rate limit or quota was reached. Try again in a while.")
         default:
-            throw Failure(message: "Gemini error \(http.statusCode): \(message ?? "unknown")")
+            throw Failure(message: "Gemini error \(http.statusCode): \(message ?? "unknown")", retryable: http.statusCode >= 500)
         }
     }
 }

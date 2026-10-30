@@ -48,7 +48,10 @@ final class Recorder: ObservableObject {
             let writer = try TapeWriter(url: url, mute: timeline)
             let capture = CallCapture()
             capture.onCall = { writer.appendCall($0) }
-            capture.onMic = { writer.appendMic($0) }
+            capture.onMic = { chunk in
+                writer.appendMic(chunk)
+                Self.meter.add(chunk.samples)
+            }
             try capture.start()
             session = Session(capture: capture, writer: writer, timeline: timeline, startedAt: Date(), call: call)
             self.followsCall = followsCall
@@ -145,24 +148,51 @@ final class Recorder: ObservableObject {
                 // Into the library, and on to its transcript and recap.
                 let item = Library.shared.add(audio: saved, app: name, duration: seconds)
                 Processor.shared.process(item.id)
-                // Saved: ask whether to give it a name (it's used for its files and in the recap).
+                // Saved: name it right there in the island (the name is used for its files and in the recap).
                 Toast.shared.show(.init(
-                    id: "saved", symbol: "checkmark", title: "Recording saved. Name it?",
-                    message: ([name, Self.duration(seconds)].compactMap { $0 } + [APIKeys.complete ? "Making the recap…" : "Add API keys for a recap"])
-                        .joined(separator: " · "),
-                    primary: .init(title: "Name it", symbol: "pencil") {
-                        MainWindow.shared.show(recording: Library.shared.item(item.id)?.id ?? item.id, rename: true)
+                    id: "saved", symbol: "checkmark.circle", title: "Recording saved", detail: Counter.text(seconds),
+                    note: APIKeys.complete ? "Recap starts now" : "Add API keys for a recap",
+                    field: .init(placeholder: "Name it, e.g. Weekly sync") { name in
+                        Library.shared.rename(item.id, to: name)
                     },
+                    primary: .init(title: "Save") {},
                     secondary: .init(title: "Not now") {},
                     timeout: 20))
             }
         }
     }
 
+    /// How loud your mic is right now, for the notch's level bars.
+    nonisolated static let meter = LevelMeter()
+
     nonisolated static func duration(_ seconds: Double) -> String {
         let total = Int(seconds.rounded())
         if total < 60 { return "\(total) s" }
         let h = total / 3600, m = (total % 3600) / 60
         return h > 0 ? "\(h) h \(m) min" : "\(m) min"
+    }
+}
+
+/// The microphone's recent loudness (0...1), written from the audio thread and read by the UI.
+final class LevelMeter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Float = 0
+
+    func add(_ samples: [Float]) {
+        guard !samples.isEmpty else { return }
+        var sum: Float = 0
+        for s in samples { sum += s * s }
+        let rms = (sum / Float(samples.count)).squareRoot()
+        // Speech sits around -40…-10 dBFS: shown as 0…1.
+        let level = max(0, min(1, (20 * log10(max(rms, 1e-6)) + 50) / 40))
+        lock.lock()
+        value = max(level, value * 0.85)
+        lock.unlock()
+    }
+
+    var level: Float {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
     }
 }

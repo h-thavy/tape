@@ -1,5 +1,6 @@
 import AVFoundation
 import AppKit
+import TapeCore
 import ServiceManagement
 import os
 
@@ -39,6 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let log = Logger(subsystem: "io.github.h-thavy.tape", category: "app")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        Fonts.register()
         NSApp.appearance = Appearance.current.nsAppearance
         NSApp.mainMenu = Self.mainMenu()
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -53,6 +55,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         Recordings.prepareFolders()
         Library.shared.load()
+        // Test hook: TAPE_TEST_TRANSCRIBE=<audio> TAPE_TEST_OUT=<file> transcribes with Gemini (in parts when
+        // long) into <file> and quits, touching nothing else.
+        if let audio = ProcessInfo.processInfo.environment["TAPE_TEST_TRANSCRIBE"],
+           let out = ProcessInfo.processInfo.environment["TAPE_TEST_OUT"], let key = APIKeys.get(.gemini) {
+            Task {
+                let started = Date()
+                do {
+                    let text = try await Gemini(key: key).transcribe(URL(fileURLWithPath: audio), prompt: RecapPrompts.transcription) { [log] in log.notice("Test transcribe: \($0, privacy: .public)") }
+                    try text.write(toFile: out, atomically: true, encoding: .utf8)
+                    self.log.notice("Test transcribe done in \(Int(Date().timeIntervalSince(started))) s")
+                } catch {
+                    try? "FAILED: \(error.localizedDescription)".write(toFile: out, atomically: true, encoding: .utf8)
+                }
+                NSApp.terminate(nil)
+            }
+            return
+        }
+        // Debug: TAPE_SNAPSHOT draws the pages and quits, touching nothing (another Tape may be recording).
+        if ProcessInfo.processInfo.environment["TAPE_SNAPSHOT"] != nil {
+            MainWindow.shared.show()
+            MainWindow.shared.snapshotIfAsked()
+            return
+        }
         Task {
             // Recordings a crash left behind are saved before anything new is recorded into that folder.
             for url in await Recordings.recoverUnfinished() {
@@ -82,12 +107,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 return
             }
 
-            MainWindow.shared.show()
-            MainWindow.shared.snapshotIfAsked()
-            await firstLaunch()
+            if !Onboarding.done || ProcessInfo.processInfo.environment["TAPE_ONBOARDING"] != nil {
+                // First launch: the introduction asks for the permissions and keys.
+                Onboarding.shared.show()
+            } else {
+                MainWindow.shared.show()
+                await askForUndecidedPermissions()
+            }
             watcher.start()
             Processor.shared.resume()
             UpdateChecker.shared.start()
+            NotchBar.shared.start()
         }
     }
 
@@ -110,7 +140,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let settings = item("Settings…", #selector(AppDelegate.openSettings), ",")
         submenu("Tape", [
             item("About Tape", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), ""),
-            .separator(), settings, .separator(),
+            .separator(), settings, item("Introduction", #selector(AppDelegate.openIntroduction), ""), .separator(),
             item("Hide Tape", #selector(NSApplication.hide(_:)), "h"),
             item("Hide Others", #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option]),
             item("Show All", #selector(NSApplication.unhideAllApplications(_:)), ""),
@@ -134,10 +164,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc func openSettings() { MainWindow.shared.show(page: .settings) }
+    @objc func openIntroduction() { Onboarding.shared.show() }
 
     /// Clicking the Dock icon with the window closed opens it again.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag { MainWindow.shared.show() }
+        if !flag { if Onboarding.done { MainWindow.shared.show() } else { Onboarding.shared.show() } }
         return true
     }
 
@@ -149,17 +180,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if recorder.isRecording { log.notice("Quit while recording") }
     }
 
-    /// Asks for what Tape needs up front, so no prompt appears in the middle of a call: on the first launch,
-    /// and again whenever a permission hasn't been decided yet (after an update signed differently, macOS
-    /// treats Tape as new).
-    private func firstLaunch() async {
+    /// Asks for a permission that hasn't been decided yet (after an update signed differently, macOS treats
+    /// Tape as new), so no prompt appears in the middle of a call. On the first launch the introduction asks.
+    private func askForUndecidedPermissions() async {
         if AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined { _ = await Permissions.requestMicrophone() }
         if Permissions.systemAudio == nil { _ = await Permissions.requestSystemAudio() }
-        guard !UserDefaults.standard.bool(forKey: "setUp") else { return }
-        UserDefaults.standard.set(true, forKey: "setUp")
-        if !Permissions.accessibility { Permissions.requestAccessibility() }
-        try? SMAppService.mainApp.register()
-        SettingsModel.shared.openAtLogin = SMAppService.mainApp.status == .enabled
     }
 
     // MARK: - Calls
@@ -174,11 +199,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         // As in Onword: "Meeting detected", what it is, and one button.
         Toast.shared.show(.init(
-            id: "call", symbol: "video", title: "Meeting detected", message: "\(call.name) · Now",
-            primary: .init(title: "Record", symbol: "waveform") { [weak self] in
+            id: "call", symbol: "video", title: "Meeting detected", message: call.name,
+            primary: .init(title: "Record", symbol: "record.circle") { [weak self] in
                 guard let self, !self.recorder.isRecording else { return }
                 self.recorder.start(call: self.watcher.current ?? call, followsCall: true)
             },
+            secondary: .init(title: "Not now") {},
             timeout: 30))
     }
 

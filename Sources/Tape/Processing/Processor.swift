@@ -83,8 +83,10 @@ final class Processor {
             log.notice("Recap for \(id, privacy: .public) ready after \(Int(Date().timeIntervalSince(started))) s")
             let named = library.applyName(id)
             let title = library.item(named)?.displayTitle ?? "Your meeting"
+            let topics = RecapDocument(recap).sections.filter { $0.number != nil }.count
             Toast.shared.show(.init(
-                id: "recap", symbol: "doc.text", title: "Recap ready", message: title,
+                id: "recap", symbol: "doc.text", title: "Recap ready",
+                message: topics > 0 ? "\(title) · \(topics) topic\(topics == 1 ? "" : "s")" : title,
                 primary: .init(title: "Open") { MainWindow.shared.show(recording: named) },
                 timeout: 10))
         } catch {

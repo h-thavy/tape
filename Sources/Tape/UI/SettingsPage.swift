@@ -57,8 +57,9 @@ struct SettingsPage: View {
     @State private var refresh = 0
 
     var body: some View {
-        PageScroll(maxWidth: 720) {
-            PageHeader(title: "Settings") { EmptyView() }
+        ScrollView {
+          VStack(alignment: .leading, spacing: 26) {
+            Text("Settings").font(Theme.display(30)).tracking(-1).accessibilityAddTraits(.isHeader)
 
             section("Recaps") {
                 SettingsCard {
@@ -66,21 +67,22 @@ struct SettingsPage: View {
                     KeyRow(service: .anthropic, detail: "Writes the recap from the transcript (Claude Opus 5.5).", last: true)
                 }
                 Text("Keys stay in your Mac's Keychain. Recordings are sent to Google and Anthropic only to make their transcript and recap.")
-                    .font(Theme.sans(12.5)).foregroundStyle(Theme.inkTertiary)
+                    .font(Theme.sans(12.5)).foregroundStyle(Theme.ink3)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             section("Calls") {
                 SettingsCard {
                     SettingsRow(title: "Ask to record when a call starts",
                                 detail: "Zoom, Teams, Meet and other browser calls, FaceTime, Slack, WhatsApp, Telegram…") {
-                        Toggle("", isOn: $settings.askOnCalls).toggleStyle(.switch).labelsHidden()
+                        Toggle("Ask to record when a call starts", isOn: $settings.askOnCalls).toggleStyle(.switch).labelsHidden()
                     }
                     SettingsRow(title: "Record calls without asking", detail: "Starts recording as soon as a call starts.") {
-                        Toggle("", isOn: $settings.autoRecord).toggleStyle(.switch).labelsHidden()
+                        Toggle("Record calls without asking", isOn: $settings.autoRecord).toggleStyle(.switch).labelsHidden()
                             .disabled(!settings.askOnCalls)
                     }
                     SettingsRow(title: "Open at login", detail: "So Tape is there when the next call starts.", last: true) {
-                        Toggle("", isOn: $settings.openAtLogin).toggleStyle(.switch).labelsHidden()
+                        Toggle("Open at login", isOn: $settings.openAtLogin).toggleStyle(.switch).labelsHidden()
                     }
                 }
             }
@@ -112,13 +114,20 @@ struct SettingsPage: View {
                             ForEach(Appearance.allCases) { Text($0.title).tag($0) }
                         }
                         .pickerStyle(.segmented).labelsHidden().frame(width: 220)
+                        .accessibilityLabel("Appearance")
                     }
-                    SettingsRow(title: "Recordings folder", detail: Recordings.folder.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"), last: true) {
+                    SettingsRow(title: "Recordings folder", detail: Recordings.folder.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")) {
                         Button("Open") { NSWorkspace.shared.open(Recordings.folder) }.buttonStyle(.pillQuiet).controlSize(.small)
+                    }
+                    SettingsRow(title: "Introduction", detail: "How Tape works, and the permissions and keys it needs.", last: true) {
+                        Button("Show") { Onboarding.shared.show() }.buttonStyle(.pillQuiet).controlSize(.small)
                     }
                 }
             }
-
+          }
+          .frame(maxWidth: 720, alignment: .leading)
+          .padding(.horizontal, 44).padding(.vertical, 32)
+          .frame(maxWidth: .infinity)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in refresh += 1 }
         .onAppear { UpdateChecker.shared.checkIfStale() }
@@ -126,7 +135,7 @@ struct SettingsPage: View {
 
     private func section(_ title: String, @ViewBuilder _ content: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            SectionLabel(text: title)
+            SectionLabel(text: title).accessibilityAddTraits(.isHeader)
             content()
         }
     }
@@ -181,11 +190,12 @@ private struct KeyRow: View {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(service.title).font(Theme.sans(14, .medium)).foregroundStyle(Theme.ink)
-                    Text(detail).font(Theme.sans(12.5)).foregroundStyle(Theme.inkTertiary).fixedSize(horizontal: false, vertical: true)
+                    Text(detail).font(Theme.sans(12.5)).foregroundStyle(Theme.ink3).fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer()
                 if let saved, !editing {
-                    Text("••••" + saved.suffix(4)).font(Theme.sans(13).monospaced()).foregroundStyle(Theme.inkTertiary)
+                    Text("••••" + saved.suffix(4)).font(Theme.mono(13)).foregroundStyle(Theme.ink3)
+                        .accessibilityLabel("Saved key ending in \(String(saved.suffix(4)))")
                     Button("Change") { editing = true }.buttonStyle(.pillQuiet).controlSize(.small)
                     Button("Remove") { settings.save(service, nil) }.buttonStyle(.pillQuiet).controlSize(.small)
                 }
@@ -194,6 +204,7 @@ private struct KeyRow: View {
                 HStack(spacing: 8) {
                     SecureField("Paste the key", text: $draft)
                         .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("\(service.title) API key")
                         .onSubmit(save)
                     Button("Save", action: save).buttonStyle(.pill).controlSize(.small)
                         .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -205,7 +216,7 @@ private struct KeyRow: View {
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
         .overlay(alignment: .bottom) {
-            if !last { Divider().overlay(Theme.border).padding(.leading, 16) }
+            if !last { Rectangle().fill(Theme.line).frame(height: 1).padding(.leading, 16) }
         }
     }
 
@@ -227,7 +238,7 @@ private struct PermissionRow: View {
     var body: some View {
         SettingsRow(title: title, detail: detail, last: last) {
             if granted {
-                Label("Allowed", systemImage: "checkmark.circle.fill").font(Theme.sans(13, .medium)).foregroundStyle(Theme.success)
+                Label("Allowed", systemImage: "checkmark.circle.fill").font(Theme.sans(13, .medium)).foregroundStyle(Theme.ready)
             } else {
                 Button("Allow") {
                     request()

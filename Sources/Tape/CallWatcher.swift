@@ -12,7 +12,7 @@ import os
 ///   (Telegram, Signal, a softphone…). Dictation only listens, so it doesn't count.
 /// A call has ended once its app has been off the mic for `endGrace` seconds.
 @MainActor
-final class CallWatcher {
+final class CallWatcher: ObservableObject {
     static let shared = CallWatcher()
     struct Call: Equatable {
         /// "Zoom", "Google Meet in Chrome", "Telegram".
@@ -24,7 +24,7 @@ final class CallWatcher {
     var onStart: ((Call) -> Void)?
     /// The call that ended, and when it was last on the mic (host clock).
     var onEnd: ((Call, Double) -> Void)?
-    private(set) var current: Call?
+    @Published private(set) var current: Call?
     private var lastSeen = Date.distantPast
     private var lastSeenHost = 0.0
     private var unknownSince: [String: Date] = [:]

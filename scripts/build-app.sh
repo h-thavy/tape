@@ -34,8 +34,8 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN_DIR/Tape" "$APP/Contents/MacOS/Tape"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
-cp -R Resources/Fonts "$APP/Contents/Resources/Fonts"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"   # regenerate: swift scripts/make-icon.swift
+cp -R Resources/Fonts "$APP/Contents/Resources/Fonts"            # Geist and Geist Mono (OFL)
 codesign --force --options runtime --sign "$SIGN_IDENTITY" --entitlements Resources/Tape.entitlements "$APP"
 # Register the fresh bundle with LaunchServices (dev builds only; releases are registered by the installer).
 if [[ "$OUT_DIR" == "build" ]]; then

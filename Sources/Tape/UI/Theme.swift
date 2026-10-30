@@ -1,54 +1,82 @@
 import AppKit
+import CoreText
 import SwiftUI
 
-/// Design tokens shared with Onword: warm "sand" neutrals, near-black ink, EB Garamond headlines and Figtree
-/// text. Every colour has a light and a dark variant.
+/// Tape's look: black and white chrome (ink on white, white on near-black in dark mode, greys for what's
+/// secondary), with colour kept for meaning: one colour per speaker, green/amber/red for a recap's status, and
+/// red for a recording in progress. Every text colour reaches 4.5:1 against the surfaces it sits on (WCAG AA)
+/// and every speaker colour 3:1; scripts/contrast.py checks them. Type is Geist, with Geist Mono for times.
 enum Theme {
     // MARK: Colours
 
-    /// Window frame behind the sidebar.
-    static let frame = dynamic(light: 0xF5F4F0, dark: 0x202020)
-    /// Main content panel.
-    static let panel = dynamic(light: 0xFFFFFF, dark: 0x1A1A1A)
-    /// Cards and rows on the panel.
-    static let card = dynamic(light: 0xFCFCFB, dark: 0x2A2A29)
-    static let border = dynamic(light: 0xEEEBE3, dark: 0x30302F)
-    static let ink = dynamic(light: 0x1A1A1A, dark: 0xE9E8E1)
-    static let inkSecondary = dynamic(light: 0x464544, dark: 0xC8C8C2)
-    static let inkTertiary = dynamic(light: 0x71716E, dark: 0x9D9C98)
-    static let primary = dynamic(light: 0x1A1A1A, dark: 0xFCFCFB)
-    static let onPrimary = dynamic(light: 0xFCFCFB, dark: 0x1A1A1A)
-    /// The page panel: warm off-white, not pure white.
-    static let page = dynamic(light: 0xFCFCFB, dark: 0x1A1A1A)
-    /// Status cards.
-    static let mutedCard = dynamic(light: 0xF1EBE1, dark: 0x30302F)
-    static let iconFaint = dynamic(light: 0xB3B2AD, dark: 0x9D9C98)
-    static let outline = dynamic(light: 0xC5C0B3, dark: 0x5B5B59)
-    /// Secondary buttons and the selected sidebar item.
-    static let buttonFill = dynamic(light: 0xEEEBE3, dark: 0x30302F)
-    /// Lavender accent for highlights.
-    static let accent = dynamic(light: 0xF4E1FF, dark: 0x3C2947)
-    static let onAccent = dynamic(light: 0x502B66, dark: 0xF0D7FF)
-    static let recording = Color(red: 0.86, green: 0.2, blue: 0.18)
-    static let success = Color(hex: 0x10B981)
-    /// The pale "lumen" fill of the call-to-action on dark cards.
-    static let lumen = Color(hex: 0xFFFFEB)
+    /// The window and the reader.
+    static let background = dynamic(light: 0xFFFFFF, dark: 0x0E0E0E)
+    /// The library column.
+    static let sidebar = dynamic(light: 0xFAFAFA, dark: 0x141414)
+    /// Cards and the selected row.
+    static let raised = dynamic(light: 0xFFFFFF, dark: 0x1B1B1B)
+    /// Chips, fields, the search box.
+    static let fill = dynamic(light: 0xF2F2F2, dark: 0x232323)
+    /// Hairlines.
+    static let line = dynamic(light: 0xEAEAEA, dark: 0x2A2A2A)
+    static let ink = dynamic(light: 0x0A0A0A, dark: 0xF5F5F5)
+    /// Body text.
+    static let body = dynamic(light: 0x333333, dark: 0xD4D4D4)
+    static let ink2 = dynamic(light: 0x4A4A4A, dark: 0xB8B8B8)
+    static let ink3 = dynamic(light: 0x6E6E6E, dark: 0x8F8F8F)
+    /// Text on an ink background (the prominent buttons).
+    static let onInk = dynamic(light: 0xFFFFFF, dark: 0x0A0A0A)
+    /// A recording in progress (the dot; 3.5:1 on white, 4.6:1 on the black island).
+    static let recording = Color(hex: 0xFF3B30)
+    /// Statuses, as text: recap ready, being made, failed.
+    static let ready = dynamic(light: 0x137333, dark: 0x4ADE80)
+    static let working = dynamic(light: 0xA04A06, dark: 0xFBBF24)
+    static let failed = dynamic(light: 0xC81E1E, dark: 0xF87171)
+    /// Switches and selection.
+    static let accent = dynamic(light: 0x0A0A0A, dark: 0x9A9A9A)
+
+    /// A colour per speaker, in order of talk time; everyone after the fourth shares the slate.
+    static func speaker(_ index: Int) -> Color {
+        speakers[min(index, speakers.count - 1)]
+    }
+    private static let speakers = zip(speakerHex.light, speakerHex.dark).map { dynamic(light: $0, dark: $1) }
+    static let speakerHex: (light: [UInt32], dark: [UInt32]) = (
+        [0x4F46E5, 0x0F8A7E, 0xC2610C, 0xD02670, 0x64748B],
+        [0xA5B4FC, 0x5EEAD4, 0xFCD34D, 0xF9A8D4, 0x94A3B8]
+    )
+    static let namedSpeakers = 4
+
+    /// On the black notch island (the same in light and dark mode).
+    enum Island {
+        static let text = Color(hex: 0xFAFAFA)
+        static let text2 = Color(hex: 0x9A9A9A)
+        static let text3 = Color(hex: 0x8A8A8A)
+        static let tile = Color.white.opacity(0.09)
+        static let quiet = Color.white.opacity(0.12)
+        static func speaker(_ index: Int) -> Color {
+            Color(hex: Theme.speakerHex.dark[min(index, Theme.speakerHex.dark.count - 1)])
+        }
+    }
 
     // MARK: Type
 
-    static func serif(_ size: CGFloat, italic: Bool = false) -> Font {
-        .custom(italic ? "EBGaramond-Italic" : "EBGaramond-Regular", size: size)
+    static func sans(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
+        Fonts.registered ? .custom("Geist", size: size).weight(weight) : .system(size: size, weight: weight)
     }
 
-    static func sans(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
-        .custom("Figtree", size: size).weight(weight)
+    /// Titles.
+    static func display(_ size: CGFloat, _ weight: Font.Weight = .bold) -> Font { sans(size, weight) }
+
+    /// Times and counters.
+    static func mono(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
+        Fonts.registered ? .custom("Geist Mono", size: size).weight(weight) : .system(size: size, weight: weight, design: .monospaced)
     }
 
     // MARK: Shape
 
     static let radius: CGFloat = 8
-    static let radiusMedium: CGFloat = 12
-    static let radiusLarge: CGFloat = 16
+    static let radiusMedium: CGFloat = 11
+    static let radiusLarge: CGFloat = 14
 
     private static func dynamic(light: UInt32, dark: UInt32) -> Color {
         Color(nsColor: NSColor(name: nil) { appearance in
@@ -57,6 +85,22 @@ enum Theme {
                            blue: CGFloat(hex & 0xFF) / 255, alpha: 1)
         })
     }
+}
+
+/// Geist and Geist Mono, from the app's Resources/Fonts (registered for this process only).
+enum Fonts {
+    @MainActor static func register() {
+        guard let folder = Bundle.main.resourceURL?.appendingPathComponent("Fonts"),
+              let files = try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil) else { return }
+        var count = 0
+        for file in files where file.pathExtension == "ttf" {
+            if CTFontManagerRegisterFontsForURL(file as CFURL, .process, nil) { count += 1 }
+        }
+        registered = count > 0
+    }
+
+    /// Set once at launch, before any view is drawn.
+    nonisolated(unsafe) static var registered = false
 }
 
 extension Color {
@@ -75,8 +119,9 @@ enum TapeMark {
         var window = CGMutablePath()
         /// The reels as rings (fill even-odd).
         var reels = CGMutablePath()
-        /// The teeth of the reels' hubs.
-        var teeth = CGMutablePath()
+        /// The reels' centres, for turning their teeth.
+        var hubs: [CGPoint] = []
+        var scale: CGFloat = 1
     }
 
     /// The cassette in `box` (a square, y-up).
@@ -87,6 +132,7 @@ enum TapeMark {
             CGRect(origin: p(x, y), size: CGSize(width: w * s, height: h * s))
         }
         var m = Shape()
+        m.scale = s
         m.window.addRoundedRect(in: r(236, 472, 552, 196), cornerWidth: 44 * s, cornerHeight: 44 * s)
         m.body.addRoundedRect(in: r(104, 288, 816, 488), cornerWidth: 76 * s, cornerHeight: 76 * s)
         m.body.addPath(m.window)
@@ -97,14 +143,24 @@ enum TapeMark {
         for cx: CGFloat in [374, 650] {
             m.reels.addEllipse(in: r(cx - 66, cy - 66, 132, 132))
             m.reels.addEllipse(in: r(cx - 36, cy - 36, 72, 72))
-            for k in 0..<6 {
-                let angle = CGFloat(k) * .pi / 3 + .pi / 6
-                let tooth = CGRect(x: -7 * s, y: 18 * s, width: 14 * s, height: 22 * s)
-                var t = CGAffineTransform(translationX: p(cx, cy).x, y: p(cx, cy).y).rotated(by: angle)
-                m.teeth.addPath(CGPath(roundedRect: tooth, cornerWidth: 4 * s, cornerHeight: 4 * s, transform: &t))
-            }
+            m.hubs.append(p(cx, cy))
         }
         return m
+    }
+
+    /// The six teeth of each hub, turned by `angle` (radians).
+    static func teeth(_ m: Shape, angle: CGFloat = 0) -> CGPath {
+        let s = m.scale
+        let path = CGMutablePath()
+        for hub in m.hubs {
+            for k in 0..<6 {
+                let a = CGFloat(k) * .pi / 3 + .pi / 6 + angle
+                let tooth = CGRect(x: -7 * s, y: 18 * s, width: 14 * s, height: 22 * s)
+                var t = CGAffineTransform(translationX: hub.x, y: hub.y).rotated(by: a)
+                path.addPath(CGPath(roundedRect: tooth, cornerWidth: 4 * s, cornerHeight: 4 * s, transform: &t))
+            }
+        }
+        return path
     }
 
     /// The menu bar icon: the cassette in the menu bar's own ink (it follows light and dark menu bars), with a
@@ -133,17 +189,34 @@ enum TapeMark {
     }
 }
 
+/// The cassette: `ink` body and reels, the window see-through (or `window`). With `spinning`, the hubs turn.
 struct TapeMarkView: View {
     var size: CGFloat = 24
+    var ink: Color = Theme.ink
+    var window: Color = .clear
+    var spinning = false
 
     var body: some View {
+        if spinning {
+            TimelineView(.animation) { context in
+                mark(angle: CGFloat(context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 6) / 6 * 2 * .pi))
+            }
+        } else {
+            mark(angle: 0)
+        }
+    }
+
+    private func mark(angle: CGFloat) -> some View {
         Canvas { context, canvasSize in
             let m = TapeMark.shape(in: CGRect(origin: .zero, size: canvasSize))
             let flip = CGAffineTransform(translationX: 0, y: canvasSize.height).scaledBy(x: 1, y: -1)
-            context.fill(Path(m.window).applying(flip), with: .color(Theme.accent))
-            context.fill(Path(m.body).applying(flip), with: .color(Theme.ink), style: FillStyle(eoFill: true))
-            context.fill(Path(m.reels).applying(flip), with: .color(Theme.ink), style: FillStyle(eoFill: true))
-            if canvasSize.width >= 48 { context.fill(Path(m.teeth).applying(flip), with: .color(Theme.ink)) }
+            context.fill(Path(m.window).applying(flip), with: .color(window))
+            context.fill(Path(m.body).applying(flip), with: .color(ink), style: FillStyle(eoFill: true))
+            context.fill(Path(m.reels).applying(flip), with: .color(ink), style: FillStyle(eoFill: true))
+            if canvasSize.width >= 40 {
+                // Turning clockwise as seen (the path is y-up, so the angle runs backwards).
+                context.fill(Path(TapeMark.teeth(m, angle: -angle)).applying(flip), with: .color(ink))
+            }
         }
         .frame(width: size, height: size)
         .accessibilityHidden(true)
@@ -152,161 +225,131 @@ struct TapeMarkView: View {
 
 // MARK: - Components
 
-/// Page title row: 24 pt semibold title, actions on the right.
-struct PageHeader<Actions: View>: View {
-    let title: String
-    @ViewBuilder var actions: () -> Actions
-
+/// The cassette and the name.
+struct Wordmark: View {
     var body: some View {
-        HStack(alignment: .center, spacing: 8) {
-            Text(title).font(Theme.sans(24, .semibold)).foregroundStyle(Theme.ink)
-            Spacer()
-            actions()
+        HStack(spacing: 8) {
+            TapeMarkView(size: 24)
+            Text("Tape").font(Theme.display(17, .bold)).tracking(-0.5)
         }
     }
 }
 
-/// Hero card: a serif headline with one italic word, a sentence, and an action.
-struct HeroCard<Action: View>: View {
-    let before: String
-    let italic: String
-    let after: String
-    let message: String
-    @ViewBuilder var action: () -> Action
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("\(before)\(Text(italic).font(Theme.serif(28, italic: true)))\(after)")
-                .font(Theme.serif(28)).tracking(-1.12)
-                .foregroundStyle(Theme.ink)
-            Text(message).font(Theme.sans(15)).foregroundStyle(Theme.inkTertiary)
-                .fixedSize(horizontal: false, vertical: true)
-            action().padding(.top, 16)
-        }
-        .padding(32)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: Theme.radiusLarge).fill(Theme.accent.opacity(0.55)))
-    }
-}
-
-/// Primary (dark) or secondary (sand) button: radius 8, 15 pt, 36 tall — or 32 at `.small`.
+/// Buttons: ink (prominent) or outlined (quiet).
 struct PillButtonStyle: ButtonStyle {
-    var prominent = true
-    var tint: Color?
+    enum Kind { case prominent, quiet }
+    var kind: Kind = .prominent
 
     func makeBody(configuration: Configuration) -> some View {
-        PillBody(configuration: configuration, prominent: prominent, tint: tint).pointerCursor()
+        PillBody(configuration: configuration, kind: kind).pointerCursor()
     }
 }
 
 private struct PillBody: View {
     let configuration: ButtonStyleConfiguration
-    let prominent: Bool
-    let tint: Color?
+    let kind: PillButtonStyle.Kind
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.controlSize) private var controlSize
+    @State private var hovering = false
 
     var body: some View {
         let small = controlSize == .small || controlSize == .mini
         configuration.label
             .lineLimit(1).fixedSize()
-            .font(Theme.sans(small ? 13.5 : 15, prominent ? .medium : .semibold))
-            .padding(.horizontal, small ? 12 : 16).padding(.vertical, small ? 6 : 8)
-            .foregroundStyle(prominent ? (tint == nil ? Theme.onPrimary : .white) : Theme.ink)
-            .background(RoundedRectangle(cornerRadius: Theme.radius).fill(prominent ? (tint ?? Theme.primary) : Theme.buttonFill))
-            .opacity(isEnabled ? (configuration.isPressed ? 0.75 : 1) : 0.4)
+            .font(Theme.sans(small ? 12.5 : 13, .semibold))
+            .padding(.horizontal, small ? 10 : 14).padding(.vertical, small ? 5 : 8)
+            .foregroundStyle(kind == .quiet ? Theme.ink : Theme.onInk)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.radius)
+                    .fill(kind == .prominent ? Theme.ink : hovering ? Theme.fill : Theme.raised)
+            )
+            .overlay(RoundedRectangle(cornerRadius: Theme.radius).strokeBorder(kind == .quiet ? Theme.line : .clear))
+            .opacity(isEnabled ? (configuration.isPressed ? 0.7 : kind == .prominent && hovering ? 0.85 : 1) : 0.35)
             .contentShape(RoundedRectangle(cornerRadius: Theme.radius))
+            .onHover { hovering = $0 }
+            .animation(.easeOut(duration: 0.12), value: hovering)
     }
 }
 
 extension ButtonStyle where Self == PillButtonStyle {
     static var pill: PillButtonStyle { PillButtonStyle() }
-    static var pillQuiet: PillButtonStyle { PillButtonStyle(prominent: false) }
-    static var pillRecord: PillButtonStyle { PillButtonStyle(tint: Theme.recording) }
+    static var pillQuiet: PillButtonStyle { PillButtonStyle(kind: .quiet) }
 }
 
-/// Small borderless icon button that darkens on hover.
+/// Small borderless icon button, darker on hover.
 struct IconButton: View {
     let systemImage: String
     let help: String
     var box: CGFloat = 28
-    var icon: CGFloat = 15
+    var icon: CGFloat = 13
     let action: () -> Void
     @State private var hovering = false
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: systemImage).font(.system(size: icon))
+            Image(systemName: systemImage).font(.system(size: icon, weight: .medium))
                 .frame(width: box, height: box)
-                .foregroundStyle(hovering ? Theme.ink : Theme.inkTertiary)
-                .background(RoundedRectangle(cornerRadius: 6).fill(hovering ? Theme.frame : .clear))
+                .foregroundStyle(hovering ? Theme.ink : Theme.ink2)
+                .background(RoundedRectangle(cornerRadius: 7).fill(hovering ? Theme.fill : .clear))
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plainPointer)
         .help(help)
         .onHover { hovering = $0 }
-        .animation(.easeOut(duration: 0.15), value: hovering)
+        .animation(.easeOut(duration: 0.12), value: hovering)
     }
 }
 
-/// Rounded search field.
-struct SearchField: View {
-    let prompt: String
-    @Binding var text: String
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass").font(.system(size: 14)).foregroundStyle(Theme.inkTertiary)
-            TextField(prompt, text: $text).textFieldStyle(.plain).font(Theme.sans(15))
-            if !text.isEmpty {
-                Button { text = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.inkTertiary) }
-                    .buttonStyle(.plainPointer)
-            }
-        }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(RoundedRectangle(cornerRadius: Theme.radius).fill(Theme.panel))
-        .overlay(RoundedRectangle(cornerRadius: Theme.radius).strokeBorder(Theme.border))
-    }
-}
-
-/// Uppercase group label ("TODAY").
-struct SectionLabel: View {
-    let text: String
-    var body: some View {
-        Text(text.uppercased()).font(Theme.sans(12, .semibold)).tracking(0.9).foregroundStyle(Theme.inkTertiary)
-    }
-}
-
-/// A table row that reveals its trailing actions on hover.
-struct HoverRow<Content: View, Actions: View>: View {
-    @ViewBuilder var content: () -> Content
-    @ViewBuilder var actions: () -> Actions
+/// An icon and a label, borderless ("Copy", "Open .md").
+struct TextIconButton: View {
+    let title: String
+    let systemImage: String
+    let action: () -> Void
     @State private var hovering = false
 
     var body: some View {
-        HStack(alignment: .center, spacing: 6) {
-            content()
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.init(top: 14, leading: 16, bottom: 14, trailing: 4))
-            actions()
-                .opacity(hovering ? 1 : 0)
-                .padding(.trailing, 8)
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: systemImage).font(.system(size: 12, weight: .medium))
+                Text(title).font(Theme.sans(12.5))
+            }
+            .foregroundStyle(hovering ? Theme.ink : Theme.ink2)
+            .padding(.horizontal, 9).padding(.vertical, 5)
+            .background(RoundedRectangle(cornerRadius: 7).fill(hovering ? Theme.fill : .clear))
+            .contentShape(Rectangle())
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(hovering ? Theme.frame : .clear)
-        .contentShape(Rectangle())
+        .buttonStyle(.plainPointer)
         .onHover { hovering = $0 }
-        .animation(.easeOut(duration: 0.15), value: hovering)
     }
 }
 
-/// One rounded list table: hairline-separated rows inside a 16-radius, 1-pt border.
-struct TableCard<Content: View>: View {
-    @ViewBuilder var content: () -> Content
+/// The search box, with its ⌘K hint.
+struct SearchField: View {
+    let prompt: String
+    @Binding var text: String
+    var focused: FocusState<Bool>.Binding
 
     var body: some View {
-        VStack(spacing: 0) { content() }
-            .clipShape(RoundedRectangle(cornerRadius: Theme.radiusLarge))
-            .overlay(RoundedRectangle(cornerRadius: Theme.radiusLarge).strokeBorder(Theme.border))
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").font(.system(size: 12.5, weight: .medium)).foregroundStyle(Theme.ink3)
+            TextField(prompt, text: $text).textFieldStyle(.plain).font(Theme.sans(13)).focused(focused)
+            if text.isEmpty {
+                Text("⌘K").font(Theme.mono(11)).foregroundStyle(Theme.ink3)
+            } else {
+                Button { text = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.ink3) }
+                    .buttonStyle(.plainPointer)
+            }
+        }
+        .padding(.horizontal, 11).frame(height: 32)
+        .background(RoundedRectangle(cornerRadius: Theme.radius).fill(Theme.fill))
+    }
+}
+
+/// A small label in capitals ("TODAY", "CALLS").
+struct SectionLabel: View {
+    let text: String
+    var body: some View {
+        Text(text.uppercased()).font(Theme.sans(11, .medium)).tracking(0.6).foregroundStyle(Theme.ink3)
     }
 }
 
@@ -315,8 +358,8 @@ struct SettingsCard<Content: View>: View {
     @ViewBuilder var content: () -> Content
     var body: some View {
         VStack(spacing: 0) { content() }
-            .background(RoundedRectangle(cornerRadius: Theme.radiusMedium).fill(Theme.card))
-            .overlay(RoundedRectangle(cornerRadius: Theme.radiusMedium).strokeBorder(Theme.border))
+            .background(RoundedRectangle(cornerRadius: Theme.radiusMedium).fill(Theme.raised))
+            .overlay(RoundedRectangle(cornerRadius: Theme.radiusMedium).strokeBorder(Theme.line))
     }
 }
 
@@ -330,10 +373,10 @@ struct SettingsRow<Control: View>: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(Theme.sans(14, .medium)).foregroundStyle(Theme.ink)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title).font(Theme.sans(13.5, .medium)).foregroundStyle(Theme.ink)
                     if let detail {
-                        Text(detail).font(Theme.sans(12.5)).foregroundStyle(Theme.inkTertiary)
+                        Text(detail).font(Theme.sans(12.5)).foregroundStyle(Theme.ink3)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
@@ -341,60 +384,54 @@ struct SettingsRow<Control: View>: View {
                 control()
             }
             .padding(.horizontal, 16).padding(.vertical, 12)
-            if !last { Divider().overlay(Theme.border).padding(.leading, 16) }
+            if !last { Rectangle().fill(Theme.line).frame(height: 1).padding(.leading, 16) }
         }
     }
 }
 
-/// A selectable underline tab: 15 pt semibold, 2-pt ink underline when selected.
-struct UnderlineTab: View {
-    let title: String
-    let selected: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Text(title).font(Theme.sans(15, .semibold)).foregroundStyle(selected ? Theme.ink : Theme.inkTertiary)
-                .padding(.vertical, 10).padding(.horizontal, 12)
-                .overlay(alignment: .bottom) {
-                    Rectangle().fill(selected ? Theme.ink : .clear).frame(height: 2).padding(.horizontal, 12)
-                }
-        }
-        .buttonStyle(.plainPointer)
-    }
-}
-
-/// A list's empty state: centred message on a sand tile.
+/// An empty or waiting state.
 struct EmptyState: View {
     let title: String
     var detail: String?
 
     var body: some View {
         VStack(spacing: 6) {
-            Text(title).font(Theme.sans(16, .medium))
+            Text(title).font(Theme.sans(14, .semibold)).foregroundStyle(Theme.ink2)
             if let detail {
-                Text(detail).font(Theme.sans(15)).foregroundStyle(Theme.inkTertiary).multilineTextAlignment(.center)
+                Text(detail).font(Theme.sans(13)).foregroundStyle(Theme.ink3).multilineTextAlignment(.center)
             }
         }
         .frame(maxWidth: .infinity)
         .padding(24)
-        .background(RoundedRectangle(cornerRadius: Theme.radiusLarge).fill(Theme.frame))
+        .background(RoundedRectangle(cornerRadius: Theme.radiusLarge).strokeBorder(Theme.line, style: StrokeStyle(lineWidth: 1, dash: [4, 4])))
     }
 }
 
-/// Standard page body: scrollable, centred, 40 pt of padding.
-struct PageScroll<Content: View>: View {
-    var maxWidth: CGFloat = 820
-    @ViewBuilder var content: () -> Content
+/// A spinning ring: something is being worked on (still, under Reduce Motion).
+struct Spinner: View {
+    var size: CGFloat = 11
+    var color: Color = Theme.ink2
+    @State private var turning = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) { content() }
-                .frame(maxWidth: maxWidth, alignment: .leading)
-                .padding(40)
-                .frame(maxWidth: .infinity)
-        }
-        .scrollIndicators(.hidden)
+        Circle().trim(from: 0.15, to: 1)
+            .stroke(color, style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+            .frame(width: size, height: size)
+            .rotationEffect(.degrees(turning ? 360 : 0))
+            .onAppear {
+                guard !reduceMotion else { return }
+                withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) { turning = true }
+            }
+            .accessibilityHidden(true)
+    }
+}
+
+/// Seconds as "0:12", "1:04:09".
+enum Counter {
+    static func text(_ seconds: TimeInterval) -> String {
+        let s = Int(seconds.isFinite ? max(0, seconds) : 0)
+        return s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, s % 3600 / 60, s % 60) : String(format: "%d:%02d", s / 60, s % 60)
     }
 }
 
@@ -415,7 +452,7 @@ extension View {
 
 struct PlainPointerButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label.pointerCursor()
+        configuration.label.opacity(configuration.isPressed ? 0.7 : 1).pointerCursor()
     }
 }
 
