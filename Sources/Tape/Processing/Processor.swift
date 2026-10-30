@@ -70,7 +70,7 @@ final class Processor {
             library.update(id) { $0.status = .writing; $0.detail = "Writing the recap…" }
             let date = item.created.formatted(.dateTime.day().month(.wide).year().hour().minute())
             let request = RecapPrompts.recapRequest(
-                recording: item.id, date: date, minutes: Int((item.duration / 60).rounded()), app: item.app,
+                recording: item.id, date: date, seconds: item.duration, app: item.app,
                 transcriptFile: library.transcriptURL(item).lastPathComponent, transcript: transcript ?? "")
             let recap = try await claude.recap(system: RecapPrompts.recapSystem, request: request)
             try (recap + "\n").write(to: library.recapURL(item), atomically: true, encoding: .utf8)

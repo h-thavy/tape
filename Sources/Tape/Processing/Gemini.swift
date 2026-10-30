@@ -35,7 +35,7 @@ struct Gemini {
 
     private func upload(_ audio: URL) async throws -> UploadedFile {
         let size = (try FileManager.default.attributesOfItem(atPath: audio.path)[.size] as? Int) ?? 0
-        let mimeType = audio.pathExtension.lowercased() == "aac" ? "audio/aac" : "audio/m4a"
+        let mimeType = await Library.audioTypes[audio.pathExtension.lowercased()] ?? "audio/m4a"
         var start = request("upload/v1beta/files", method: "POST")
         start.setValue("resumable", forHTTPHeaderField: "X-Goog-Upload-Protocol")
         start.setValue("start", forHTTPHeaderField: "X-Goog-Upload-Command")

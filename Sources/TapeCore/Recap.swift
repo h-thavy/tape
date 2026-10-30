@@ -36,7 +36,7 @@ public enum RecapPrompts {
 
         # <A short title saying what the meeting was about> — Meeting Recap
 
-        Source: recording "<recording name>" (~<length> min, <languages heard, e.g. Khmer with English terms>). \
+        Source: recording "<recording name>" (~<length, e.g. 55 min>, <languages heard, e.g. Khmer with English terms>). \
         Transcript: `<transcript file name>`. <One sentence on how reliable names and speaker labels are, and so \
         how people are referred to.>
 
@@ -72,12 +72,12 @@ public enum RecapPrompts {
         """
 
     /// The request for one recording.
-    public static func recapRequest(recording name: String, date: String, minutes: Int, app: String?,
+    public static func recapRequest(recording name: String, date: String, seconds: Double, app: String?,
                                     transcriptFile: String, transcript: String) -> String {
         """
         Recording: "\(name)"
         Date: \(date)
-        Length: about \(max(1, minutes)) min
+        Length: \(length(seconds))
         Call app: \(app ?? "unknown")
         Transcript file: \(transcriptFile)
 
@@ -85,6 +85,13 @@ public enum RecapPrompts {
         \(transcript)
         </transcript>
         """
+    }
+}
+
+extension RecapPrompts {
+    /// "about 55 min", "40 s".
+    static func length(_ seconds: Double) -> String {
+        seconds < 60 ? "\(max(1, Int(seconds.rounded()))) s" : "about \(Int((seconds / 60).rounded())) min"
     }
 }
 

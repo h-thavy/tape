@@ -33,7 +33,8 @@ struct RecordingItem: Codable, Identifiable, Equatable {
     /// The recap's title; before there is one, the call app ("Google Meet in Opera GX" → "Google Meet call").
     var displayTitle: String {
         if let title { return title }
-        guard var name = app else { return "Recording" }
+        // An imported recording: its file name.
+        guard var name = app else { return id }
         if let range = name.range(of: " in ") { name = String(name[..<range.lowerBound]) }
         return name + " call"
     }
@@ -49,6 +50,12 @@ final class Library: ObservableObject {
     private var indexURL: URL {
         Recordings.inProgress.deletingLastPathComponent().appendingPathComponent("library.json")
     }
+
+    /// Audio Gemini takes as it is (anything else is converted to .m4a on import).
+    static let audioTypes: [String: String] = [
+        "m4a": "audio/m4a", "aac": "audio/aac", "mp3": "audio/mp3", "wav": "audio/wav", "flac": "audio/flac",
+        "ogg": "audio/ogg", "opus": "audio/opus", "aiff": "audio/aiff", "aif": "audio/aiff", "webm": "audio/webm",
+    ]
 
     func audioURL(_ item: RecordingItem) -> URL { Recordings.folder.appendingPathComponent(item.audioFile) }
     func transcriptURL(_ item: RecordingItem) -> URL { Recordings.folder.appendingPathComponent(item.id + ".transcript.txt") }
@@ -72,7 +79,7 @@ final class Library: ObservableObject {
         let fm = FileManager.default
         known = known.filter { fm.fileExists(atPath: Recordings.folder.appendingPathComponent($0.audioFile).path) }
         let files = (try? fm.contentsOfDirectory(at: Recordings.folder, includingPropertiesForKeys: [.creationDateKey])) ?? []
-        for file in files where ["m4a", "aac"].contains(file.pathExtension) {
+        for file in files where Self.audioTypes[file.pathExtension.lowercased()] != nil {
             let id = file.deletingPathExtension().lastPathComponent
             guard !known.contains(where: { $0.id == id }) else { continue }
             known.append(Self.discovered(file))
@@ -105,6 +112,75 @@ final class Library: ObservableObject {
             item.title = RecapFormat.title(of: recap)
         }
         return item
+    }
+
+    // MARK: - Importing
+
+    /// Recordings from before Tape (or from elsewhere: a phone, Zoom's own recording, a video): copied into the
+    /// recordings folder (video and other formats converted to .m4a), then transcribed and recapped like any
+    /// call. Returns the new recordings.
+    func importFiles(_ urls: [URL]) async -> [RecordingItem] {
+        var added: [RecordingItem] = []
+        Recordings.prepareFolders()
+        for source in urls {
+            let ext = source.pathExtension.lowercased()
+            let keepsFormat = Self.audioTypes[ext] != nil
+            let destination = Self.freeURL(stem: source.deletingPathExtension().lastPathComponent, ext: keepsFormat ? ext : "m4a")
+            do {
+                if keepsFormat {
+                    try FileManager.default.copyItem(at: source, to: destination)
+                } else {
+                    try await Self.exportAudio(from: source, to: destination)
+                }
+            } catch {
+                log.error("Couldn't import \(source.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                Toast.shared.show(.init(id: "import", symbol: "exclamationmark.triangle", title: "Couldn't import \(source.lastPathComponent)",
+                                        message: "Tape reads audio (m4a, mp3, wav, aac, flac…) and video files."))
+                continue
+            }
+            let asset = AVURLAsset(url: destination)
+            let duration = (try? await asset.load(.duration)).map(\.seconds).flatMap { $0.isFinite ? $0 : nil } ?? 0
+            let created = (try? source.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? Date()
+            let item = RecordingItem(id: destination.deletingPathExtension().lastPathComponent, audioFile: destination.lastPathComponent,
+                                     created: created, duration: duration, app: nil, status: .queued)
+            items.append(item)
+            items.sort { $0.created > $1.created }
+            save()
+            added.append(item)
+            log.notice("Imported \(source.lastPathComponent, privacy: .public) (\(Int(duration)) s)")
+        }
+        return added
+    }
+
+    /// A name in the recordings folder no other recording (or its transcript or recap) uses.
+    private static func freeURL(stem: String, ext: String) -> URL {
+        let fm = FileManager.default
+        func taken(_ name: String) -> Bool {
+            let files = (try? fm.contentsOfDirectory(atPath: Recordings.folder.path)) ?? []
+            return files.contains { ($0 as NSString).deletingPathExtension == name || $0.hasPrefix(name + ".") }
+        }
+        var name = stem
+        var n = 2
+        while taken(name) {
+            name = "\(stem) \(n)"
+            n += 1
+        }
+        return Recordings.folder.appendingPathComponent(name).appendingPathExtension(ext)
+    }
+
+    /// The audio of a video (or of a format Gemini doesn't take), as .m4a.
+    private static func exportAudio(from source: URL, to destination: URL) async throws {
+        let asset = AVURLAsset(url: source)
+        guard try await !asset.loadTracks(withMediaType: .audio).isEmpty,
+              let export = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        export.outputURL = destination
+        export.outputFileType = .m4a
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+            export.exportAsynchronously { done.resume() }
+        }
+        guard export.status == .completed else { throw export.error ?? CocoaError(.fileWriteUnknown) }
     }
 
     // MARK: - Changes

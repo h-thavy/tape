@@ -38,9 +38,10 @@ final class RecapTests: XCTestCase {
     }
 
     func testRecapRequestCarriesTheTranscript() {
-        let request = RecapPrompts.recapRequest(recording: "2026-10-30 14.05 Zoom", date: "30 Oct 2026", minutes: 0,
+        let request = RecapPrompts.recapRequest(recording: "2026-10-30 14.05 Zoom", date: "30 Oct 2026", seconds: 15,
                                                 app: "Zoom", transcriptFile: "a.transcript.txt", transcript: "[00:01] សួស្តី hello")
-        XCTAssertTrue(request.contains("about 1 min"))
+        XCTAssertTrue(request.contains("Length: 15 s"))
+        XCTAssertEqual(RecapPrompts.length(3300), "about 55 min")
         XCTAssertTrue(request.contains("<transcript>\n[00:01] សួស្តី hello\n</transcript>"))
     }
 }

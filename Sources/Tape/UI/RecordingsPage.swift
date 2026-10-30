@@ -24,10 +24,32 @@ private struct RecordingList: View {
     @ObservedObject private var recorder = Recorder.shared
     @ObservedObject private var settings = SettingsModel.shared
     @State private var search = ""
+    @State private var dropping = false
 
     var body: some View {
+        list
+            // Drop recordings (or videos) anywhere on the page to import them.
+            .onDrop(of: [.fileURL], isTargeted: $dropping) { providers in
+                Importer.load(providers)
+                return true
+            }
+            .overlay {
+                if dropping {
+                    RoundedRectangle(cornerRadius: 16).strokeBorder(Theme.ink.opacity(0.35), style: StrokeStyle(lineWidth: 2, dash: [8, 6]))
+                        .background(RoundedRectangle(cornerRadius: 16).fill(Theme.accent.opacity(0.35)))
+                        .overlay(Text("Drop to make recaps").font(Theme.serif(26)).foregroundStyle(Theme.ink))
+                        .padding(16)
+                        .allowsHitTesting(false)
+                }
+            }
+    }
+
+    private var list: some View {
         PageScroll {
             PageHeader(title: "Recordings") {
+                Button { Importer.choose() } label: { Label("Import", systemImage: "square.and.arrow.down") }
+                    .buttonStyle(.pillQuiet)
+                    .help("Make recaps of recordings from before Tape, or from elsewhere (audio or video files)")
                 if recorder.isRecording {
                     Button { recorder.stop() } label: { Label("Stop and save", systemImage: "stop.fill") }
                         .buttonStyle(.pillRecord)
@@ -49,7 +71,7 @@ private struct RecordingList: View {
             }
             if library.items.isEmpty {
                 EmptyState(title: "No recordings yet",
-                           detail: "When a call starts, Tape asks whether to record it. You can also start a recording above.")
+                           detail: "When a call starts, Tape asks whether to record it. To recap a recording you already have, drop it here or use Import.")
             } else {
                 ForEach(groups, id: \.title) { group in
                     VStack(alignment: .leading, spacing: 8) {
@@ -140,6 +162,46 @@ private extension View {
         font(Theme.sans(12, .semibold)).foregroundStyle(ink)
             .padding(.horizontal, 8).padding(.vertical, 3)
             .background(Capsule().fill(fill))
+    }
+}
+
+// MARK: - Import
+
+/// Bringing in recordings made before Tape (or anywhere else), to recap them.
+@MainActor
+enum Importer {
+    static func choose() {
+        let panel = NSOpenPanel()
+        panel.title = "Import recordings"
+        panel.message = "Choose recordings (audio or video) to transcribe and recap."
+        panel.prompt = "Import"
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [.audio, .movie]
+        guard panel.runModal() == .OK else { return }
+        start(panel.urls)
+    }
+
+    static func load(_ providers: [NSItemProvider]) {
+        Task {
+            var urls: [URL] = []
+            for provider in providers {
+                if let url = try? await provider.loadItem(forTypeIdentifier: "public.file-url") as? Data,
+                   let fileURL = URL(dataRepresentation: url, relativeTo: nil) {
+                    urls.append(fileURL)
+                }
+            }
+            start(urls)
+        }
+    }
+
+    private static func start(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        Task {
+            let added = await Library.shared.importFiles(urls)
+            for item in added { Processor.shared.process(item.id) }
+            if added.count == 1, let item = added.first { MainWindow.shared.selected = item.id }
+        }
     }
 }
 

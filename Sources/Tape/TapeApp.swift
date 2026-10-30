@@ -61,6 +61,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             Library.shared.load()
 
+            // Test hook: TAPE_TEST_IMPORT=<file>[,<file>…] imports those files (without making recaps) and quits.
+            if let paths = ProcessInfo.processInfo.environment["TAPE_TEST_IMPORT"] {
+                let added = await Library.shared.importFiles(paths.split(separator: ",").map { URL(fileURLWithPath: String($0)) })
+                log.notice("Test import: \(added.map { "\($0.audioFile) (\(Int($0.duration)) s)" }.joined(separator: ", "), privacy: .public)")
+                NSApp.terminate(nil)
+                return
+            }
+
             // Test hook: TAPE_TEST_RECORD=<seconds> records for that long (the call going on, if there is one,
             // with its mute button followed), saves, and quits.
             if let seconds = ProcessInfo.processInfo.environment["TAPE_TEST_RECORD"].flatMap(Double.init) {

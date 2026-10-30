@@ -43,6 +43,9 @@ curl -fsSL https://raw.githubusercontent.com/h-thavy/tape/main/scripts/install.s
   ~/Documents/Tape/2026-10-30 14.05 Google Meet in Opera GX.recap.md
   ```
 
+- **Recaps recordings you already have.** Use **Import** (or drop files on the window) for recordings from
+  before Tape or from anywhere else: audio (m4a, mp3, wav, aac, flac, ogg…) or video (the sound is taken out).
+  Recordings already in `~/Documents/Tape` show up by themselves, with a "Make the recap" button.
 - **Follows the call's mute button.** Muted in the meeting: your mic is left out entirely. Unmuted: it's
   recorded. (Needs Accessibility. A browser shows only its visible tab, so while a browser call's tab is in
   the background Tape keeps the last state it saw.)
@@ -77,6 +80,7 @@ swift scripts/make-icon.swift
 ```
 
 Test hooks: `open --env TAPE_TEST_RECORD=10 build/Tape.app` records for 10 s, saves and quits;
+`--env TAPE_TEST_IMPORT=<file>,<file>` imports files and quits;
 `--env TAPE_DEBUG_TRACKS=1` also keeps the raw `mic.caf` and `call.caf` (in
 `~/Library/Application Support/Tape/Recording`); `--env TAPE_DEBUG_AX=1` logs what the mute-button search
 sees; `--env TAPE_SNAPSHOT=<folder>` saves the window's pages as PNGs.
