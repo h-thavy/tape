@@ -45,7 +45,8 @@ public enum RecapPrompts {
         return text
     }
 
-    /// For Claude: the recap's shape and the rules for writing it.
+    /// For Claude: the recap's shape and the rules for writing it, with an example in the same shape (an
+    /// invented meeting, so nothing real is in the app).
     public static let recapSystem = """
         You turn meeting transcripts into recaps, for the people who were in the meeting and for colleagues who \
         missed it and need to act on it.
@@ -58,55 +59,118 @@ public enum RecapPrompts {
 
         Write the recap in English, in Markdown, in exactly this shape:
 
-        # <A short title saying what the meeting was about> — Meeting Recap
+        # "<title>" — Meeting Recap
 
-        Source: recording "<recording name>" (~<length, e.g. 55 min>, <languages heard, e.g. Khmer with English terms>). \
-        Transcript: `<transcript file name>`. <One sentence on how reliable names and speaker labels are, and so \
-        how people are referred to.>
+        Source: recording "<recording name>" (~<length, e.g. 55 min>, <languages heard, e.g. Khmer with English \
+        terms>). Transcript: `<transcript file name>`. <One short sentence on how reliable names and speaker \
+        labels are, and so how people are referred to.>
 
-        <One short paragraph: what kind of meeting this was, who was in it (by role), and the topics, in the order \
-        they came up. If the recording's name doesn't match what was discussed, say so.>
+        <One paragraph of two to four sentences: what kind of meeting this was and who was in it, by role, \
+        ending with "Topics: <topic>, <topic> and <topic>." in the order they came up. If the recording's name \
+        doesn't match what was discussed, say so first.>
 
-        ## 1. <First topic>
-        <!-- at <MM:SS where this topic starts in the transcript> -->
+        ## 1. <Topic>
 
         - **<Lead-in>:** <what was said, decided or asked, and why>
 
-        ## 2. <Next topic>
-        <!-- at <MM:SS> -->
+        ## 2. <Topic>
 
         …
 
+        ## <N>. Other
+
+        - <small items>
+
         ## Next steps
 
-        - <Owner (role or name)>: <action>
+        - <Owner>: <action>, <action>.
+
+        The title is the recording's name when the request says it's a real name; otherwise a short title for \
+        what the meeting was about.
 
         How to write it:
-        - Right under each numbered heading, put the time where that topic starts, taken from the \
-        transcript's timestamps, as an HTML comment: `<!-- at 17:28 -->` (`<!-- at 1:02:10 -->` after the first \
-        hour). It's hidden when the Markdown is shown; the app uses it to link the topic to the recording.
-        - One numbered section per real topic, in the order discussed. Put small leftover items in a last \
-        section called "Other".
-        - Start each bullet with a short bold lead-in naming the point ("**Decision:**", "**Payroll bug:**", \
-        "**Pending:**"), then plain, specific sentences. A discussion that doesn't break into points can be a \
-        short paragraph instead.
+        - Group the discussion into a few real topics, usually 3 to 6 plus "Other", not a section for every \
+        turn of the conversation. One topic can hold several related threads (payroll, invoices and the \
+        exchange rate together under accounting).
+        - Each topic is a flat list of bullets: never indent a bullet under another, and no numbered steps \
+        inside a topic. When a point has several parts, write them in one bullet or as separate bullets. Start a \
+        bullet with a short bold lead-in naming the point ("**Decision:**", "**Payroll bug:**", \
+        "**Pending:**", "**Boss's verdict:**") when it helps, then plain, specific sentences. A topic that is \
+        one discussion can open with a sentence or two before its bullets.
         - Keep what someone acting on this needs: decisions and the reasons given, requirements with their \
-        details (fields, numbers, prices, dates, versions), problems and their status, disagreements, deadlines \
-        and open questions. Say clearly when something is unresolved, pending or parked.
+        details (fields, numbers, prices, dates, versions), problems and their status, who will do what, \
+        deadlines and open questions. Say plainly when something is unresolved, pending or parked.
+        - Be direct: state what was said ("The boss said to make those fields optional."), not how it was \
+        transcribed. Don't hedge with "apparently", "presumably" or "it seems"; if something really is unclear, \
+        say so once, briefly.
         - Quote someone only when the exact words matter (a verdict, a commitment), translated into English.
         - Translate Khmer into natural English. Keep product names, technical terms and English phrases as said.
-        - Don't add anything that wasn't said. If part of the audio was unclear, say so briefly instead of \
-        guessing.
-        - No filler, no praise for the meeting and no closing summary. Reply with the Markdown recap only.
+        - Next steps: one bullet per owner, their actions joined on one line. Use roles when names aren't \
+        reliable.
+        - The length follows the meeting: a few lines for a short check-in, about 500 words for half an hour \
+        and 800 for an hour of dense discussion. Leave out what nobody needs to act on or remember (greetings, \
+        small talk, repeated points). No filler, no praise for the meeting and no closing summary. Don't add \
+        anything that wasn't said.
+
+        After the recap, on a last line of its own, write where each numbered topic starts in the transcript, \
+        from its timestamps: `[topic times] 1=MM:SS, 2=MM:SS, …` (H:MM:SS after the first hour). The app reads \
+        that line and takes it out of the recap.
+
+        An example of the shape, length and tone, for an invented meeting:
+
+        <example>
+        # "Clinic booking app review" — Meeting Recap
+
+        Source: recording "Clinic booking app review" (~25 min, Khmer with English terms). Transcript: \
+        `Clinic booking app review.transcript.txt`. Speakers are not labelled reliably, so attribution is by role.
+
+        A weekly review between the product owner and two developers of a clinic's booking app, with the \
+        clinic's manager joining for the last part. Topics: the booking flow, payments and the staff \
+        dashboard, and the clinic's logo.
+
+        ## 1. Booking flow
+
+        - **Slots:** patients pick a doctor, then a 15-minute slot. Fully booked days are greyed out.
+        - **Change from last week:** a patient can book for a family member, with that person's name and phone \
+        number.
+        - **Decision:** no account is needed to book, only a phone number and an SMS code. The manager's \
+        reason: older patients give up at sign-up screens.
+        - **Pending:** reminders by Telegram as well as SMS were parked until after launch.
+
+        ## 2. Payments and the staff dashboard
+
+        - **Deposit:** a 5 USD deposit through KHQR, refunded when the patient cancels 24 hours ahead.
+        - **Payment bug:** the deposit is sometimes charged twice when the patient taps Pay again on a slow \
+        connection. Still unresolved; a developer is adding a lock on the button and checking the bank's \
+        callback.
+        - **Dashboard:** reception sees today's bookings by doctor and can mark no-shows. The manager asked \
+        for a daily total of deposits, in USD and KHR.
+        - **Manager's verdict:** "If the double charge is fixed, we can open it to patients."
+
+        ## 3. Other
+
+        - The clinic's logo on the booking page is low resolution; the manager will send a new one.
+
+        ## Next steps
+
+        - Developers: fix the double charge, add the daily deposit total, use the new logo.
+        - Product owner: set the launch date once the payment fix is tested.
+        - Manager: send the logo.
+
+        [topic times] 1=00:12, 2=09:40, 3=22:05
+        </example>
+
+        Reply with the Markdown recap and its topic times line only.
         """
 
-    /// The request for one recording.
-    public static func recapRequest(recording name: String, date: String, seconds: Double, app: String?,
+    /// The request for one recording. `named`: the recording's name is a real name (given by a person, or the
+    /// meeting's title), not just the call app and the time.
+    public static func recapRequest(recording name: String, named: Bool = false, date: String, seconds: Double, app: String?,
                                     transcriptFile: String, transcript: String) -> String {
         """
-        Recording: "\(name)"
+        Recording: "\(name)" (\(named ? "a real name: use it as the title" : "not a real name, only the call app and time: title the recap after what was discussed"))
         Date: \(date)
-        Length: \(length(seconds))
+        Length: \(length(seconds)); keep the recap under \(wordBudget(seconds)) words, the topic times line not counted
         Call app: \(app ?? "unknown")
         Transcript file: \(transcriptFile)
 
@@ -118,6 +182,11 @@ public enum RecapPrompts {
 }
 
 extension RecapPrompts {
+    /// About 20 words a minute of meeting (an hour's dense meeting in about 1,100), between 120 and 1,400.
+    static func wordBudget(_ seconds: Double) -> Int {
+        min(1400, max(120, Int((seconds / 60 * 20 / 50).rounded()) * 50))
+    }
+
     /// "about 55 min", "40 s".
     static func length(_ seconds: Double) -> String {
         seconds < 60 ? "\(max(1, Int(seconds.rounded()))) s" : "about \(Int((seconds / 60).rounded())) min"
@@ -125,6 +194,33 @@ extension RecapPrompts {
 }
 
 public enum RecapFormat {
+    /// Bullets indented under others moved up to the top level (a recap's topics are flat lists).
+    public static func flattened(_ recap: String) -> String {
+        recap.components(separatedBy: "\n").map { line in
+            let trimmed = line.drop { $0 == " " || $0 == "\t" }
+            guard trimmed.count < line.count, trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") else { return line }
+            return "- " + trimmed.dropFirst(2)
+        }.joined(separator: "\n")
+    }
+
+    /// The recap without its `[topic times] 1=00:40, 2=17:28` line, and those times (topic number → seconds).
+    public static func splitTopicTimes(_ recap: String) -> (recap: String, times: [String: Double]) {
+        var lines = recap.components(separatedBy: "\n")
+        while let last = lines.last, last.trimmingCharacters(in: .whitespaces).isEmpty { lines.removeLast() }
+        guard let index = lines.lastIndex(where: { $0.trimmingCharacters(in: .whitespaces).lowercased().hasPrefix("[topic times]") }) else {
+            return (recap, [:])
+        }
+        let line = lines[index].trimmingCharacters(in: .whitespaces).dropFirst("[topic times]".count)
+        var times: [String: Double] = [:]
+        for part in line.split(separator: ",") {
+            let pair = part.split(separator: "=").map { $0.trimmingCharacters(in: CharacterSet.whitespaces.union(CharacterSet(charactersIn: "`"))) }
+            if pair.count == 2, !pair[0].isEmpty, let seconds = Transcript.seconds(pair[1]) { times[pair[0]] = seconds }
+        }
+        lines.remove(at: index)
+        while let last = lines.last, last.trimmingCharacters(in: .whitespaces).isEmpty { lines.removeLast() }
+        return (lines.joined(separator: "\n"), times)
+    }
+
     /// The meeting's subject from the recap's first heading: `# "Pricing review" — Meeting Recap` → `Pricing review`.
     public static func title(of recap: String) -> String? {
         guard let line = recap.split(separator: "\n", omittingEmptySubsequences: true)
@@ -202,11 +298,22 @@ public struct RecapDocument: Equatable {
         public let blocks: [MarkdownBlock]
     }
 
+    /// The same recap with topic times from elsewhere (the app keeps them beside the recap), for topics whose
+    /// heading has none.
+    public func with(times: [String: Double]) -> RecapDocument {
+        var copy = self
+        copy.sections = sections.map { section in
+            Section(number: section.number, title: section.title,
+                    time: section.time ?? section.number.flatMap { times[$0] }, blocks: section.blocks)
+        }
+        return copy
+    }
+
     public let title: String?
     /// The "Source: …" line.
     public let source: String?
     public let intro: [MarkdownBlock]
-    public let sections: [Section]
+    public private(set) var sections: [Section]
 
     public init(_ markdown: String) {
         let marker = try! NSRegularExpression(pattern: #"^<!--\s*at\s+((?:\d+:)?\d{1,2}:\d{2})\s*-->$"#)

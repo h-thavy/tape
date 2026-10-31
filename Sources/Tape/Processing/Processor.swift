@@ -70,14 +70,18 @@ final class Processor {
             library.update(id) { $0.status = .writing; $0.detail = "Writing the recap…" }
             let date = item.created.formatted(.dateTime.day().month(.wide).year().hour().minute())
             // A name given meanwhile is what the recording is called.
+            let name = library.item(id)?.name
             let request = RecapPrompts.recapRequest(
-                recording: library.item(id)?.name ?? item.id, date: date, seconds: item.duration, app: item.app,
+                recording: name ?? item.id, named: name != nil, date: date, seconds: item.duration, app: item.app,
                 transcriptFile: library.transcriptURL(item).lastPathComponent, transcript: transcript ?? "")
-            let recap = try await claude.recap(system: RecapPrompts.recapSystem, request: request)
+            // The topic times are kept beside the recap, so the .md is only the recap.
+            let (reply, times) = RecapFormat.splitTopicTimes(try await claude.recap(system: RecapPrompts.recapSystem, request: request))
+            let recap = RecapFormat.flattened(reply)
             try (recap + "\n").write(to: library.recapURL(item), atomically: true, encoding: .utf8)
             library.update(id) {
                 $0.status = .ready
                 $0.detail = nil
+                $0.topicTimes = times.isEmpty ? nil : times
                 $0.title = RecapFormat.title(of: recap)
                 // Not named after the meeting (or by you): named after what it was about.
                 if $0.name == nil, let title = $0.title, !Library.fileSafe(title).isEmpty { $0.name = Library.fileSafe(title) }

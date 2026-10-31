@@ -89,6 +89,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             return
         }
+        // Test hook: TAPE_TEST_RECAP=<transcript> TAPE_TEST_OUT=<file> writes a recap of that transcript with
+        // Claude (its topic times on the last line) and quits, touching nothing else.
+        if let path = ProcessInfo.processInfo.environment["TAPE_TEST_RECAP"],
+           let out = ProcessInfo.processInfo.environment["TAPE_TEST_OUT"], let key = APIKeys.get(.anthropic) {
+            Task {
+                let transcript = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
+                let file = URL(fileURLWithPath: path).lastPathComponent
+                let request = RecapPrompts.recapRequest(recording: String(file.dropLast(".transcript.txt".count)), date: "31 October 2026",
+                                                        seconds: Transcript(transcript, duration: 0).turns.last?.end ?? 0, app: "Google Meet",
+                                                        transcriptFile: file, transcript: transcript)
+                do {
+                    let recap = try await Claude(key: key).recap(system: RecapPrompts.recapSystem, request: request)
+                    try recap.write(toFile: out, atomically: true, encoding: .utf8)
+                } catch {
+                    try? "FAILED: \(error.localizedDescription)".write(toFile: out, atomically: true, encoding: .utf8)
+                }
+                NSApp.terminate(nil)
+            }
+            return
+        }
         // Test hook: TAPE_TEST_ISLAND=<seconds> shows "Meeting detected" for that long and quits, touching
         // nothing (for checking what screen sharing sees).
         if let seconds = ProcessInfo.processInfo.environment["TAPE_TEST_ISLAND"].flatMap(Double.init) {

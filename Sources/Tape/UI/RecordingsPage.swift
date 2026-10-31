@@ -431,7 +431,7 @@ private struct Reader: View {
 
     var body: some View {
         let transcript = Parsed.shared.transcript(item)
-        let recap = Parsed.shared.recap(item)
+        let recap = Parsed.shared.recap(item).map { $0.with(times: item.topicTimes ?? [:]) }
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 VStack(alignment: .leading, spacing: 8) {

@@ -102,3 +102,45 @@ final class TranscriptCleaningTests: XCTestCase {
                        "[00:00] Speaker 1: of customer, of patient ដែលគាត់អញ្ជើញមកនេះ...\n\n[00:04] Speaker 3: OK (inaudible) ចា៎")
     }
 }
+
+final class TopicTimesTests: XCTestCase {
+    func testTimesLineIsSplitOff() {
+        let reply = "# \"Sync\" — Meeting Recap\n\n## 1. A\n\n- x\n\n## 2. B\n\n- y\n\n[topic times] 1=00:40, 2=1:02:03\n"
+        let (recap, times) = RecapFormat.splitTopicTimes(reply)
+        XCTAssertEqual(recap, "# \"Sync\" — Meeting Recap\n\n## 1. A\n\n- x\n\n## 2. B\n\n- y")
+        XCTAssertEqual(times, ["1": 40, "2": 3723])
+        XCTAssertEqual(RecapDocument(recap).with(times: times).sections.map(\.time), [40, 3723])
+    }
+
+    func testRecapWithoutTimes() {
+        let (recap, times) = RecapFormat.splitTopicTimes("# T\n\n- x")
+        XCTAssertEqual(recap, "# T\n\n- x")
+        XCTAssertTrue(times.isEmpty)
+    }
+
+    func testWordBudget() {
+        XCTAssertEqual(RecapPrompts.wordBudget(15), 120)
+        XCTAssertEqual(RecapPrompts.wordBudget(32 * 60), 650)
+        XCTAssertEqual(RecapPrompts.wordBudget(55 * 60), 1100)
+        XCTAssertEqual(RecapPrompts.wordBudget(3 * 3600), 1400)
+    }
+
+    func testNestedBulletsAreFlattened() {
+        XCTAssertEqual(RecapFormat.flattened("- **Analytics:** on top:\n  - Illnesses.\n    * Stock.\n- Next\n  continued"),
+                       "- **Analytics:** on top:\n- Illnesses.\n- Stock.\n- Next\n  continued")
+    }
+
+    func testTitleKeepsTheQuotedName() {
+        XCTAssertEqual(RecapFormat.title(of: "# \"AI-Powered CV Automation\" — Meeting Recap"), "AI-Powered CV Automation")
+    }
+
+    func testPromptCarriesTheSeniorShape() {
+        let system = RecapPrompts.recapSystem
+        XCTAssertTrue(system.contains("# \"<title>\" — Meeting Recap"))
+        XCTAssertTrue(system.contains("never indent a bullet under another"))
+        XCTAssertTrue(system.contains("[topic times]"))
+        XCTAssertFalse(system.contains("<!-- at"))
+        XCTAssertTrue(RecapPrompts.recapRequest(recording: "Weekly sync", named: true, date: "d", seconds: 60, app: nil,
+                                                transcriptFile: "f", transcript: "t").contains("a real name"))
+    }
+}

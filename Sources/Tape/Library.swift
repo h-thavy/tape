@@ -30,6 +30,8 @@ struct RecordingItem: Codable, Identifiable, Equatable {
     var title: String?
     /// The name you gave it (its files are named after it too).
     var name: String?
+    /// Where each numbered topic of the recap starts (topic number → seconds).
+    var topicTimes: [String: Double]?
 
     var isWorking: Bool { [.queued, .transcribing, .writing].contains(status) }
     /// The recap's title; before there is one, the call app ("Google Meet in Opera GX" → "Google Meet call").
@@ -247,6 +249,14 @@ final class Library: ObservableObject {
         update(id) {
             $0.id = stem
             $0.audioFile = audio.lastPathComponent
+        }
+        // The recap names the recording and its transcript file: those follow the new name.
+        let recap = Recordings.folder.appendingPathComponent(stem + ".recap.md")
+        if var text = try? String(contentsOf: recap, encoding: .utf8) {
+            text = text.replacingOccurrences(of: "`\(id).transcript.txt`", with: "`\(stem).transcript.txt`")
+                .replacingOccurrences(of: "recording \"\(id)\"", with: "recording \"\(stem)\"")
+                .replacingOccurrences(of: "# \"\(id)\" — Meeting Recap", with: "# \"\(stem)\" — Meeting Recap")
+            try? text.write(to: recap, atomically: true, encoding: .utf8)
         }
         if MainWindow.shared.selected == id { MainWindow.shared.selected = stem }
         log.notice("Renamed \(id, privacy: .public) to \(stem, privacy: .public)")
