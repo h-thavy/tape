@@ -36,22 +36,47 @@ enum PipelineE2E {
                 Onboarding.snapshot(to: folder)
                 MainWindow.shared.show(recording: imported.id)
             }
+            func gemini() -> Gemini {
+                Gemini(key: "fixture-key", endpoint: endpoint, preparedAudio: { url in
+                    try Data(contentsOf: url).write(to: folder.appendingPathComponent("reference.wav"), options: .atomic)
+                })
+            }
             let processor = missingKey ? Processor(notify: false)
-                : Processor(gemini: Gemini(key: "fixture-key", endpoint: endpoint),
+                : Processor(gemini: gemini(),
                             claude: Claude(key: "fixture-claude-key", endpoint: endpoint.appendingPathComponent("v1/messages")),
                             notify: false)
             processor.process(imported.id)
             var item = try await wait(imported.id)
             if missingKey {
                 try check(item.status == .waitingForKeys, "Missing key must wait for Settings")
-            } else if scenario == "recap-failure-retry" {
-                try check(item.status == .failed, "Expected first summary request to fail")
-                try check(Library.shared.transcript(item)?.isEmpty == false, "Failed recap lost the transcript")
+            } else if ["recap-failure-retry", "resume-transcription", "changed-audio-retry", "corrupt-cache-retry"].contains(scenario) {
+                try check(item.status == .failed, "Expected the initial processing request to fail")
+                if scenario == "recap-failure-retry" {
+                    try check(Library.shared.transcript(item)?.isEmpty == false, "Failed recap lost the transcript")
+                } else {
+                    try check(Library.shared.transcript(item) == nil, "Partial transcript was marked complete")
+                }
+                if scenario == "changed-audio-retry" {
+                    let url = Library.shared.audioURL(item)
+                    var data = try Data(contentsOf: url)
+                    data[44] ^= 64
+                    try data.write(to: url)
+                }
+                if scenario == "corrupt-cache-retry" {
+                    let url = Recordings.inProgress.deletingLastPathComponent()
+                        .appendingPathComponent("Transcription").appendingPathComponent(item.id + ".wav")
+                    var data = try Data(contentsOf: url)
+                    data[44] ^= 64
+                    try data.write(to: url)
+                }
                 try check(Library.shared.recap(item) == nil, "Failed recap was saved")
-                processor.process(item.id)
+                Library.shared.load()
+                let retryProcessor = Processor(gemini: gemini(),
+                                               claude: Claude(key: "fixture-claude-key", endpoint: endpoint.appendingPathComponent("v1/messages")), notify: false)
+                retryProcessor.process(item.id)
                 item = try await wait(item.id)
                 try check(item.status == .ready, "Retry failed")
-            } else if ["empty-transcript", "empty-summary", "truncated-summary", "invalid-audio", "empty-audio", "refused-key", "refused-claude-key", "interrupted-summary", "refused-summary"].contains(scenario) {
+            } else if ["empty-transcript", "empty-summary", "truncated-summary", "invalid-audio", "empty-audio", "refused-key", "refused-claude-key", "interrupted-summary", "refused-summary", "bounded-incomplete"].contains(scenario) {
                 try check(item.status == .failed, "Expected failure, got \(item.status.rawValue)")
                 try check(Library.shared.recap(item) == nil, "Failure left a finished recap")
             } else {
@@ -62,6 +87,15 @@ enum PipelineE2E {
             receipt["transcript"] = Library.shared.transcript(item) ?? ""
             receipt["recap"] = Library.shared.recap(item) ?? ""
             if item.status == .ready {
+                receipt["duration"] = item.duration
+                let player = AudioPlayer()
+                player.load(Library.shared.audioURL(item), duration: item.duration)
+                try await Task.sleep(for: .milliseconds(500))
+                try check(abs(player.duration - item.duration) < 0.001, "Player replaced decoded duration with container metadata")
+                player.seek(to: item.duration + 60)
+                try check(player.time <= item.duration, "Player sought past decoded audio")
+                receipt["player_duration"] = player.duration
+                player.stop()
                 try check(item.topicTimes?["1"] == 0, "Detailed recap lost its topic playback time")
                 MainWindow.shared.show(recording: item.id)
                 MainWindow.shared.tab = .recap

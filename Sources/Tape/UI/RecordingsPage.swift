@@ -447,7 +447,8 @@ private struct Reader: View {
                 }
 
                 MeetingMap(player: player, transcript: transcript, topics: recap?.sections ?? [], duration: item.duration)
-                    .onAppear { player.load(Library.shared.audioURL(item)) }
+                    .onAppear { player.load(Library.shared.audioURL(item), duration: item.duration) }
+                    .onChange(of: item.duration) { player.updateDuration(item.duration) }
 
                 StatusBanner(item: item)
 
@@ -705,21 +706,22 @@ final class AudioPlayer: ObservableObject {
     private var player: AVPlayer?
     private var observer: Any?
 
-    func load(_ url: URL) {
+    func load(_ url: URL, duration: Double) {
+        stop()
+        updateDuration(duration)
         let player = AVPlayer(url: url)
         self.player = player
-        Task {
-            if let length = try? await AVURLAsset(url: url).load(.duration), length.isNumeric { duration = length.seconds }
-        }
         observer = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.25, preferredTimescale: 600), queue: .main) { [weak self] time in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.time = time.seconds
-                if let item = player.currentItem, item.duration.isNumeric { self.duration = item.duration.seconds }
                 if self.playing, player.rate == 0 { self.playing = false }
             }
         }
     }
+
+    /// The library's decoded duration is authoritative; some containers overstate their timeline.
+    func updateDuration(_ seconds: Double) { duration = seconds.isFinite ? max(0, seconds) : 0 }
 
     func toggle() {
         guard let player else { return }
@@ -733,8 +735,9 @@ final class AudioPlayer: ObservableObject {
     }
 
     func seek(to seconds: Double, play: Bool = false) {
-        player?.seek(to: CMTime(seconds: max(0, seconds), preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
-        time = max(0, seconds)
+        let target = duration > 0 ? min(duration, max(0, seconds)) : max(0, seconds)
+        player?.seek(to: CMTime(seconds: target, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+        time = target
         if play, !playing { toggle() }
     }
 
@@ -758,7 +761,7 @@ private struct MeetingMap: View {
     let duration: Double
     @State private var scrubbing: Double?
 
-    private var total: Double { max(player.duration, duration, transcript?.turns.last?.end ?? 0, 1) }
+    private var total: Double { max(duration > 0 ? duration : player.duration, 1) }
     private var now: Double { scrubbing ?? player.time }
 
     var body: some View {

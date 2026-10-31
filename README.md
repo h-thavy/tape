@@ -45,9 +45,12 @@ curl -fsSL https://raw.githubusercontent.com/h-thavy/tape/main/scripts/install.s
   context, topic sections, decisions, open questions and next steps by owner. Topic timestamps link back
   to the recording. Both calls use high reasoning; processing a long meeting can take several minutes.
   Both appear in the recording's **Transcript** and **Recap** tabs and are saved next to the audio.
-  Tape normalizes before splitting, avoiding inaccurate source-format timelines. Recordings over 12 minutes
-  are transcribed in 10-minute parts, with timestamps and speaker labels carried
-  forward. If the recap fails, retrying reuses the saved transcript. Processing starts only when you ask,
+  Tape normalizes before splitting, avoiding inaccurate source-format timelines. Audio is transcribed in
+  pieces of up to five minutes, with timestamps and speaker context carried forward. An incomplete or empty
+  piece is retried as two smaller pieces, with bounded recovery. Completed pieces and the exact working WAV
+  are saved locally so retrying after a failure or restart resumes progress. Changed audio or prompts
+  invalidate that checkpoint. If the recap fails, retrying reuses the saved full transcript. Processing starts
+  only when you ask,
   unless you turn on *Make recaps automatically* in Settings. No Flask, Python server or FFmpeg is required:
 
   ```
@@ -100,7 +103,9 @@ meeting map is adjustable with VoiceOver (15 s steps), and animations stop under
 Recordings, transcripts and recaps are saved in `~/Documents/Tape`. To process one, a temporary 16 kHz mono
 WAV is sent to Google (Gemini) for transcription, then its transcript is sent to Anthropic (Claude) for the recap, using
 your respective keys. Tape attempts to delete the uploaded audio after transcription, including on failure, and removes
-the local working WAV. Your API keys are kept in the macOS Keychain. Existing saved recaps remain readable.
+the local working WAV once the complete transcript is saved. While transcription is unfinished, its working
+WAV and completed pieces are retained under `~/Library/Application Support/Tape/Transcription` for retry.
+Your API keys are kept in the macOS Keychain. Existing saved recaps remain readable.
 
 ## Build from source
 
@@ -138,6 +143,7 @@ island's states as PNGs, and quits; `--env TAPE_TEST_VERSION=0.1.0
 
 `python3 scripts/e2e/khmer_pipeline.py` runs the native debug app against a local Gemini and Claude fixture service,
 using synthetic stereo audio and dummy credentials. It covers success, missing/refused keys, invalid audio,
-empty/truncated responses, long recordings and retrying a failed recap without re-transcription. It writes
-repeatable receipts, uploaded WAVs, transcripts, recaps and native reader snapshots to `build/e2e/`.
+empty/truncated responses, recursive chunk recovery, restart/resume, changed/corrupt caches, long recordings
+and retrying a failed recap without re-transcription. It compares completed audio pieces sample-for-sample
+with their normalized source and writes repeatable receipts, uploaded WAVs, transcripts, recaps and native reader snapshots to `build/e2e/`.
 This verifies integration, not live model accuracy. See [verification details](docs/khmer-pipeline-verification.md).

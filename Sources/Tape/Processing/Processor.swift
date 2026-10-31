@@ -72,10 +72,17 @@ final class Processor {
             var transcript = library.transcript(item)
             if transcript?.isEmpty != false {
                 library.update(id) { $0.status = .transcribing; $0.detail = "Uploading the recording…" }
-                let text = try await gemini.transcribe(library.audioURL(item), prompt: RecapPrompts.transcription) { message in
+                let checkpoint = Recordings.inProgress.deletingLastPathComponent()
+                    .appendingPathComponent("Transcription", isDirectory: true).appendingPathComponent(item.id + ".json")
+                let text = try await gemini.transcribe(library.audioURL(item), prompt: RecapPrompts.transcription,
+                                                     checkpoint: checkpoint, preparedDuration: { seconds in
+                    self.library.update(id) { $0.duration = seconds }
+                }) { message in
                     Task { @MainActor in self.library.update(id) { $0.detail = message } }
                 }
                 try text.write(to: library.transcriptURL(item), atomically: true, encoding: .utf8)
+                try? FileManager.default.removeItem(at: checkpoint)
+                try? FileManager.default.removeItem(at: checkpoint.deletingPathExtension().appendingPathExtension("wav"))
                 transcript = text
                 log.notice("Transcribed \(id, privacy: .public) in \(Int(Date().timeIntervalSince(started))) s (\(text.count) characters)")
             }
@@ -84,7 +91,7 @@ final class Processor {
             let request = RecapPrompts.recapRequest(
                 recording: name ?? item.id, named: name != nil || item.app == nil,
                 date: item.created.formatted(.dateTime.day().month(.wide).year().hour().minute()),
-                seconds: item.duration, app: item.app,
+                seconds: library.item(id)?.duration ?? item.duration, app: item.app,
                 transcriptFile: library.transcriptURL(item).lastPathComponent, transcript: transcript ?? "")
             let (reply, times) = RecapFormat.splitTopicTimes(try await claude.recap(system: RecapPrompts.recapSystem, request: request))
             let recap = RecapFormat.flattened(reply)

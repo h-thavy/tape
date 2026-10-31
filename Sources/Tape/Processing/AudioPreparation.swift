@@ -57,15 +57,59 @@ enum AudioPreparation {
             guard reader.status == .completed, size > 0 else {
                 throw Gemini.Failure(message: "This recording is empty or couldn't be decoded. Try another audio file.")
             }
-            var header = Data()
-            func text(_ value: String) { header.append(contentsOf: value.utf8) }
-            func u32(_ value: UInt32) { var v = value.littleEndian; withUnsafeBytes(of: &v) { header.append(contentsOf: $0) } }
-            func u16(_ value: UInt16) { var v = value.littleEndian; withUnsafeBytes(of: &v) { header.append(contentsOf: $0) } }
-            text("RIFF"); u32(UInt32(size) + 36); text("WAVE")
-            text("fmt "); u32(16); u16(1); u16(1); u32(16_000); u32(32_000); u16(2); u16(16)
-            text("data"); u32(UInt32(size))
             try file.seek(toOffset: 0)
-            try file.write(contentsOf: header)
+            try file.write(contentsOf: header(bytes: size))
         }.value
+    }
+
+    static let sampleRate = 16_000
+
+    /// Only accepts the canonical PCM WAV produced above, never assumes an imported WAV has a 44-byte header.
+    static func frames(in wav: URL) throws -> Int {
+        let size = try FileManager.default.attributesOfItem(atPath: wav.path)[.size] as? Int ?? 0
+        guard size > 44, size - 44 <= Int(UInt32.max) - 36, (size - 44) % 2 == 0 else {
+            throw Gemini.Failure(message: "The prepared audio is empty or invalid.")
+        }
+        let file = try FileHandle(forReadingFrom: wav)
+        defer { try? file.close() }
+        guard try file.read(upToCount: 44) == header(bytes: size - 44) else {
+            throw Gemini.Failure(message: "The prepared audio format is invalid.")
+        }
+        return (size - 44) / 2
+    }
+
+    /// Split decoded PCM on exact sample boundaries, without a second lossy encode or timeline rounding.
+    static func slice(_ wav: URL, start: Int, count: Int, to output: URL) throws {
+        let total = try frames(in: wav)
+        guard start >= 0, count > 0, start <= total, count <= total - start else {
+            throw Gemini.Failure(message: "The audio piece is outside the recording.")
+        }
+        try header(bytes: count * 2).write(to: output)
+        let input = try FileHandle(forReadingFrom: wav)
+        defer { try? input.close() }
+        let file = try FileHandle(forWritingTo: output)
+        defer { try? file.close() }
+        try input.seek(toOffset: UInt64(44 + start * 2))
+        try file.seekToEnd()
+        var remaining = count * 2
+        while remaining > 0 {
+            try Task.checkCancellation()
+            guard let data = try input.read(upToCount: min(remaining, 1_048_576)), !data.isEmpty else {
+                throw Gemini.Failure(message: "Couldn't read the complete audio piece.")
+            }
+            try file.write(contentsOf: data)
+            remaining -= data.count
+        }
+    }
+
+    private static func header(bytes: Int) -> Data {
+        var data = Data()
+        func text(_ value: String) { data.append(contentsOf: value.utf8) }
+        func u32(_ value: UInt32) { var v = value.littleEndian; withUnsafeBytes(of: &v) { data.append(contentsOf: $0) } }
+        func u16(_ value: UInt16) { var v = value.littleEndian; withUnsafeBytes(of: &v) { data.append(contentsOf: $0) } }
+        text("RIFF"); u32(UInt32(bytes) + 36); text("WAVE")
+        text("fmt "); u32(16); u16(1); u16(1); u32(16_000); u32(32_000); u16(2); u16(16)
+        text("data"); u32(UInt32(bytes))
+        return data
     }
 }

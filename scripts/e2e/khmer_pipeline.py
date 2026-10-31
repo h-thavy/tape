@@ -26,9 +26,11 @@ def run_case(binary, folder, scenario, seconds=4, audio_path=None):
             frame = struct.pack("<hh", 400, -200) * 48000
             for _ in range(seconds):
                 audio.writeframesraw(frame)
-    expected_parts = math.ceil(seconds / 600) if seconds > 720 else 1
+    expected_parts = math.ceil(seconds / 300)
     summary = SUMMARY.replace('recording "meeting"', f'recording "{source.stem}"')
     uploaded_seconds = []
+    accepted_pcm = []
+    last_pcm = b""
     if scenario == "invalid-audio" and not audio_path:
         source.write_bytes(b"not an audio recording")
     with source.open("rb") as stream:
@@ -51,6 +53,7 @@ def run_case(binary, folder, scenario, seconds=4, audio_path=None):
             self.wfile.write(data)
 
         def do_POST(self):
+            nonlocal last_pcm
             try:
                 body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
                 events.append({"method": "POST", "path": self.path})
@@ -64,6 +67,7 @@ def run_case(binary, folder, scenario, seconds=4, audio_path=None):
                     counts["uploads"] += 1
                     uploaded = folder / f"uploaded-{counts['uploads']}.wav"
                     uploaded.write_bytes(body)
+                    last_pcm = body[44:]
                     with wave.open(str(uploaded)) as audio:
                         assert audio.getframerate() == 16000
                         assert audio.getnchannels() == 1
@@ -81,7 +85,17 @@ def run_case(binary, folder, scenario, seconds=4, audio_path=None):
                     if scenario == "long-audio" and counts["transcriptions"] == 2:
                         assert f"part 2 of {expected_parts}" in payload["input"][0]["text"]
                         assert "<previous>" in payload["input"][0]["text"]
-                    text = "" if scenario == "empty-transcript" else TRANSCRIPT
+                    if scenario in ("resume-transcription", "changed-audio-retry", "corrupt-cache-retry") and counts["transcriptions"] == 2:
+                        if scenario in ("changed-audio-retry", "corrupt-cache-retry"):
+                            accepted_pcm.clear()
+                        return self.reply({"error": {"message": "Quota reached"}}, 429)
+                    if scenario == "bounded-incomplete" or (scenario in ("incomplete-recovery", "continuation-recovery") and counts["transcriptions"] == 1):
+                        return self.reply({"status": "requires_continuation" if scenario == "continuation-recovery" else "incomplete",
+                                           "usage": {"total_output_tokens": 65536},
+                                           "steps": [{"type": "model_output", "content": [{"type": "text", "text": "[00:00] Speaker 1: Discard incomplete text"}]}]})
+                    text = "" if scenario == "empty-transcript" or (scenario == "empty-piece-recovery" and counts["transcriptions"] == 1) else TRANSCRIPT
+                    if text:
+                        accepted_pcm.append(last_pcm)
                     self.reply({"status": "completed", "steps": [{"type": "model_output", "content": [{"type": "text", "text": text}]}]})
                 elif self.path == "/v1/messages":
                     counts["summaries"] += 1
@@ -97,7 +111,7 @@ def run_case(binary, folder, scenario, seconds=4, audio_path=None):
                     assert isinstance(text_input, str), "Claude must receive text only"
                     assert all(line in text_input for line in TRANSCRIPT.splitlines())
                     if scenario == "long-audio":
-                        assert "[10:00]" in text_input and "[10:02]" in text_input
+                        assert "[05:00]" in text_input and "[10:00]" in text_input
                     system = payload["system"]
                     assert "Write the recap in English" in system
                     assert "Next steps" in system and "never guess a name" in system
@@ -161,8 +175,16 @@ def run_case(binary, folder, scenario, seconds=4, audio_path=None):
     with source.open("rb") as stream:
         assert hashlib.file_digest(stream, "sha256").hexdigest() == source_hash, "Source audio changed"
     assert not any("fixture_error" in event for event in events), events
-    if scenario in ("success", "recap-failure-retry", "long-audio", "fallback-summary"):
-        assert counts["transcriptions"] == (expected_parts if scenario == "long-audio" else 1), counts
+    if scenario in ("success", "recap-failure-retry", "long-audio", "fallback-summary", "incomplete-recovery", "continuation-recovery", "empty-piece-recovery", "resume-transcription", "changed-audio-retry", "corrupt-cache-retry"):
+        expected_requests = {"long-audio": expected_parts, "incomplete-recovery": 3, "continuation-recovery": 3,
+                             "empty-piece-recovery": 3, "resume-transcription": 4, "changed-audio-retry": 5, "corrupt-cache-retry": 5}.get(scenario, 1)
+        assert counts["transcriptions"] == expected_requests, counts
+        assert "Discard incomplete text" not in receipt["transcript"]
+        with wave.open(str(folder / "reference.wav")) as reference:
+            assert b"".join(accepted_pcm) == reference.readframes(reference.getnframes()), "Pieces lost, repeated or altered PCM frames"
+        # Allow codec/resampler padding; the exact coverage check above uses the same prepared WAV.
+        assert abs(receipt["duration"] - seconds) < 0.05
+        assert receipt["player_duration"] == receipt["duration"]
         assert counts["summaries"] == (2 if scenario == "recap-failure-retry" else 1), counts
         # Tape renames the recording and its source reference from the recap title.
         expected = summary.replace(f'Source: recording "{source.stem}"', 'Source: recording "Team planning"')
@@ -170,6 +192,8 @@ def run_case(binary, folder, scenario, seconds=4, audio_path=None):
         assert all(line in receipt["transcript"] for line in TRANSCRIPT.splitlines())
         assert (folder / "recap.png").stat().st_size > 10000
         assert (folder / "transcript.png").stat().st_size > 10000
+    elif scenario == "bounded-incomplete":
+        assert counts["transcriptions"] == 3 and counts["summaries"] == 0, counts
     elif scenario == "empty-transcript":
         assert counts["summaries"] == 0
     elif scenario in ("invalid-audio", "empty-audio", "missing-key", "missing-gemini-key", "missing-claude-key"):
@@ -199,7 +223,8 @@ def main():
     binpath = subprocess.check_output(["swift", "build", "--show-bin-path"], cwd=ROOT, text=True).strip()
     cases = ["success", "recap-failure-retry", "empty-transcript", "empty-summary", "truncated-summary",
              "invalid-audio", "empty-audio", "refused-key", "missing-key", "missing-gemini-key", "missing-claude-key",
-             "refused-claude-key", "interrupted-summary", "refused-summary", "fallback-summary", "long-audio"]
+             "refused-claude-key", "interrupted-summary", "refused-summary", "fallback-summary", "long-audio", "incomplete-recovery", "continuation-recovery", "empty-piece-recovery",
+             "bounded-incomplete", "resume-transcription", "changed-audio-retry", "corrupt-cache-retry"]
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=True)
     if args.audio:
@@ -207,7 +232,7 @@ def main():
                              args.audio_seconds, args.audio)]
     else:
         receipts = [run_case(Path(binpath) / "Tape", args.output / case, case,
-                        721 if case == "long-audio" else 0 if case == "empty-audio" else 4) for case in cases]
+                        721 if case == "long-audio" else 604 if case in ("resume-transcription", "changed-audio-retry", "corrupt-cache-retry") else 240 if case in ("incomplete-recovery", "continuation-recovery", "empty-piece-recovery", "bounded-incomplete") else 0 if case == "empty-audio" else 4) for case in cases]
     (args.output / "receipt.json").write_text(json.dumps({"passed": True, "mode": "local Gemini and Claude fixtures, supplied audio" if args.audio else "local Gemini and Claude fixtures, synthetic audio", "cases": receipts}, indent=2))
 
 
