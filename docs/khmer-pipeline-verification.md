@@ -87,6 +87,20 @@ Concurrency verification: the pre-change E2E measured only one active request (`
 
 The first piece establishes speaker context. Subsequent windows contain at most three independent pieces and share the most recent completed context; recursive children remain sequential within their slot. Checkpoint mutations and atomic writes are serialized by an actor. A window drains its in-flight work before reporting an error, retaining successful peers and upload cleanup, and no later window or recap starts after a failure. The context wording/version changed, so checkpoints from the prior prompt are invalidated; complete saved transcripts remain reusable. The three older deterministic changed-source/cache/resume fixtures explicitly use one slot; the new parallel fixtures use the production default of three.
 
-Fresh live long-recording retests on the concurrency build are in progress. Do not treat the earlier sequential test results as verification of the new build's model output quality.
+Fresh live long-recording retests passed using the production sources at `336500b`. Each started with an empty isolated library and the real Keychain-backed Gemini and Anthropic clients; no saved transcript or reference text was seeded.
+
+| Recording length | Full live processing time | English recap words | Completed audio pieces |
+| --- | --- | --- | --- |
+| 74 minutes | 24:26 | 1,695 | 15 |
+| 72 minutes | 43:25 | 1,820 | 20, after five recursive splits |
+| 49 minutes | 14:22 | 1,298 | 10 |
+
+The 72-minute recording recovered from 18 generic Gemini processing failures and finished without inserting unrecoverable-segment markers. The earlier sequential build failed on that recording and the 74-minute recording. The 49-minute recording took 31:22 in the sequential run and 14:22 in this run; these are single observations with three isolated test processes sharing the provider account, not a general speed guarantee. Normal Tape queues recordings and runs at most three pieces within the active recording.
+
+All three prepared WAVs were 16 kHz mono 16-bit PCM, within 0.1 seconds of independently decoded durations. Logged successful piece lengths covered each complete normalized recording. Transcripts were chronological, Claude completed with `end_turn`, topic links were saved, checkpoint audio was cleaned up, and original recordings and six accepted reference files retained their hashes. Both native reader tabs were visually checked for all three results. Exact uploaded PCM coverage under concurrency and recursive recovery is established by the deterministic E2E, rather than inferred from live text accuracy.
+
+The recaps retained the main reference topics, figures, constraints and next steps, but are longer and are not exact factual matches. One omits an explicit organizational-gap list; another differs from its reference on some figures and tool-access wording. Speaker labels remain inconsistent, and names/acronyms need review. The last timestamp in the 72-minute transcript is about 54 seconds before the file ends; the closing text matches the reference, but exact audio-to-word timing and trailing audio were not adjudicated. A complete provider response is not a word-level accuracy check. These limitations are recorded in the private comparisons; private meeting details remain outside Git.
+
+Evidence is retained under ignored `build/parallel-live-20261031-97zhwhio/`: source/binary parity, input/output hashes, provider log, three native receipts and reader captures, normalization checks, comparisons, repeat instructions and `verification-receipt.json`. `verify-evidence.py` rechecks saved evidence without provider calls. The private app changes only startup to isolate the library and invoke the real Processor; it is not installed or released. Microphone/call capture remains outside these imported-file checks.
 
 The actual OGG native fixture was rerun with the production parallel default and passed (`build/e2e-parallel-real/receipt.json`), including all six uploaded pieces, exact normalized PCM coverage, timestamp/context handling and the 26:38 player duration. Provider replies in this check are fixtures, not recognition evidence.
