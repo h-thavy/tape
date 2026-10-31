@@ -921,6 +921,7 @@ private struct RecapView: View {
         } else {
             VStack(alignment: .leading, spacing: 22) {
                 MarkdownBlocks(blocks: document.intro, size: 15)
+                if !document.summary.isEmpty { summary }
                 ForEach(Array(document.sections.enumerated()), id: \.offset) { _, section in
                     HStack(alignment: .top, spacing: 14) {
                         badge(section.number)
@@ -957,6 +958,25 @@ private struct RecapView: View {
         }
     }
 
+    /// The key points in Khmer, set apart above the topics.
+    private var summary: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text(RecapDocument.summaryHeading).font(Theme.sans(15, .semibold)).foregroundStyle(Theme.ink)
+                Text("Key points in Khmer").font(Theme.sans(12)).foregroundStyle(Theme.ink3)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isHeader)
+            MarkdownBlocks(blocks: document.summary, size: 15, lineSpacing: 9)
+        }
+        .padding(.horizontal, 18).padding(.vertical, 16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: Theme.radiusLarge).fill(Theme.fill.opacity(0.55)))
+        .overlay(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 2).fill(Theme.ink).frame(width: 3).padding(.vertical, 14)
+        }
+    }
+
     @ViewBuilder private func badge(_ number: String?) -> some View {
         if let number {
             Text(number).font(Theme.mono(11.5, .semibold)).foregroundStyle(Theme.onInk)
@@ -972,10 +992,25 @@ private struct RecapView: View {
     }
 }
 
+/// Debug: a recap file drawn as the reader shows it (TAPE_SNAPSHOT_RECAP=<file.md> with TAPE_SNAPSHOT).
+@MainActor
+enum RecapSnapshot {
+    static func write(_ file: URL, to url: URL) {
+        guard let markdown = try? String(contentsOf: file, encoding: .utf8) else { return }
+        let (recap, times) = RecapFormat.splitTopicTimes(markdown)
+        let view = NSHostingView(rootView: RecapView(document: RecapDocument(recap).with(times: times), markdown: recap) { _ in }
+            .frame(width: 820).padding(32).background(Theme.background))
+        view.frame = NSRect(origin: .zero, size: view.fittingSize)
+        Snapshot.write(view, to: url)
+    }
+}
+
 /// Paragraphs, bullets with bold lead-ins, numbered lines and sub-headings.
 struct MarkdownBlocks: View {
     let blocks: [MarkdownBlock]
     var size: CGFloat = 14.5
+    /// Between lines (more for Khmer, whose letters stack).
+    var lineSpacing: CGFloat?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
@@ -988,23 +1023,23 @@ struct MarkdownBlocks: View {
                 case .bullet(let depth, let text):
                     HStack(alignment: .firstTextBaseline, spacing: 10) {
                         Circle().fill(depth == 0 ? Theme.ink2 : Theme.ink3).frame(width: 4.5, height: 4.5).offset(y: -2.5)
-                        inline(text)
+                        inline(text).fixedSize(horizontal: false, vertical: true)
                     }
                     .padding(.leading, CGFloat(depth) * 18)
                 case .numbered(let number, let text):
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text("\(number).").font(Theme.mono(13)).foregroundStyle(Theme.ink3)
-                        inline(text)
+                        inline(text).fixedSize(horizontal: false, vertical: true)
                     }
                 case .paragraph(let text):
-                    if !text.hasPrefix("<!--") { inline(text) }
+                    if !text.hasPrefix("<!--") { inline(text).fixedSize(horizontal: false, vertical: true) }
                 case .rule:
                     Rectangle().fill(Theme.line).frame(height: 1)
                 }
             }
         }
         .font(Theme.sans(size))
-        .lineSpacing(size * 0.32)
+        .lineSpacing(lineSpacing ?? size * 0.32)
         .foregroundStyle(Theme.body)
         .textSelection(.enabled)
         .frame(maxWidth: .infinity, alignment: .leading)

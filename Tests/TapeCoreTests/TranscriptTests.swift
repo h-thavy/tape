@@ -118,6 +118,15 @@ final class TopicTimesTests: XCTestCase {
         XCTAssertTrue(times.isEmpty)
     }
 
+    func testKhmerSummaryIsKeptApart() {
+        let recap = "# \"Sync\" — Meeting Recap\n\nSource: x.\n\nA sync. Topics: a.\n\n## សង្ខេប\n\n- ចំណុចទីមួយ។\n- ចំណុចទីពីរ។\n\n## 1. A\n\n- x\n"
+        let doc = RecapDocument(recap)
+        XCTAssertEqual(doc.summary, [.bullet(depth: 0, text: "ចំណុចទីមួយ។"), .bullet(depth: 0, text: "ចំណុចទីពីរ។")])
+        XCTAssertEqual(doc.intro, [.paragraph("A sync. Topics: a.")])
+        XCTAssertEqual(doc.sections.map(\.title), ["A"])
+        XCTAssertTrue(RecapPrompts.recapSystem.contains("## សង្ខេប"))
+    }
+
     func testWordBudget() {
         XCTAssertEqual(RecapPrompts.wordBudget(15), 120)
         XCTAssertEqual(RecapPrompts.wordBudget(32 * 60), 650)

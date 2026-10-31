@@ -121,6 +121,9 @@ final class MainWindow: ObservableObject {
             window?.appearance = nil
             page = .recordings
             marked = []
+            if let recap = ProcessInfo.processInfo.environment["TAPE_SNAPSHOT_RECAP"] {
+                RecapSnapshot.write(URL(fileURLWithPath: recap), to: folder.appendingPathComponent("recap-file.png"))
+            }
             Onboarding.snapshot(to: folder)
             Toast.snapshots(to: folder)
             NotchBar.snapshots(to: folder)

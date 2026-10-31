@@ -30,6 +30,8 @@ def run_case(binary, folder, scenario, seconds=4, audio_path=None):
                 audio.writeframesraw(struct.pack("<hh", 400 + second % 1000, -200) * rate)
     expected_parts = math.ceil(seconds / 300)
     summary = SUMMARY.replace('recording "meeting"', f'recording "{source.stem}"')
+    if scenario == "success":
+        summary = summary.replace("\n\n## 1.", "\n\n## សង្ខេប\n\n- យើងនឹងប្រជុំនៅថ្ងៃស្អែក។\n- ក្រុមត្រូវរៀបចំរបាយការណ៍។\n\n## 1.")
     uploaded_seconds = []
     accepted_pcm = []
     uploads = {}
@@ -157,6 +159,7 @@ def run_case(binary, folder, scenario, seconds=4, audio_path=None):
                         assert starts == sorted(start // 16000 for start, _ in accepted_pcm), "Claude received unordered or missing pieces"
                     system = payload["system"]
                     assert "Write the recap in English" in system
+                    assert "## សង្ខេប" in system
                     assert "Next steps" in system and "never guess a name" in system
                     if scenario == "refused-claude-key":
                         return self.reply({"error": {"message": "Invalid API key"}}, 401)

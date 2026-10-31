@@ -42,7 +42,8 @@ curl -fsSL https://raw.githubusercontent.com/h-thavy/tape/main/scripts/install.s
   Tape prepares a temporary **16 kHz mono PCM WAV** using native macOS audio decoding, preserving the
   original. Gemini (`gemini-3.8-flash`) writes the timestamped Khmer transcript, keeping English terms as
   spoken. A text-only Claude call (`claude-opus-5-5`) writes a detailed **English meeting recap**:
-  context, topic sections, decisions, open questions and next steps by owner. Topic timestamps link back
+  context, topic sections, decisions, open questions and next steps by owner. A short Khmer summary with
+  2–4 key points appears above the English topics. Topic timestamps link back
   to the recording. Both calls use high reasoning; processing a long meeting can take several minutes.
   Both appear in the recording's **Transcript** and **Recap** tabs and are saved next to the audio.
   Tape normalizes before splitting, avoiding inaccurate source-format timelines. Audio is transcribed in

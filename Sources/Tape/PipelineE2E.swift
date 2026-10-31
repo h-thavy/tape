@@ -1,6 +1,7 @@
 #if DEBUG
 import AppKit
 import Foundation
+import TapeCore
 
 /// Runs the real native import → conversion → Gemini → Claude → save → reader flow with a loopback fixture API.
 /// Called before normal startup, so it never starts call detection or touches personal recordings or keys.
@@ -97,6 +98,10 @@ enum PipelineE2E {
             receipt["transcript"] = Library.shared.transcript(item) ?? ""
             receipt["recap"] = Library.shared.recap(item) ?? ""
             if item.status == .ready {
+                let document = RecapDocument(Library.shared.recap(item) ?? "")
+                receipt["khmer_summary_blocks"] = document.summary.count
+                try check(document.summary.count == (scenario == "success" ? 2 : 0),
+                          "Khmer summary or legacy English-only recap was parsed incorrectly")
                 receipt["duration"] = item.duration
                 let player = AudioPlayer()
                 player.load(Library.shared.audioURL(item), duration: item.duration)
