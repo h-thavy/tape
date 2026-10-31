@@ -4,7 +4,7 @@ import TapeCore
 import os
 
 /// One recorded call. Its files sit side by side in the recordings folder:
-/// `<name>.m4a` (the audio), `<name>.transcript.txt` (Gemini) and `<name>.recap.md` (Gemini).
+/// `<name>.m4a` (the audio), `<name>.transcript.txt` (Gemini) and `<name>.recap.md` (Claude).
 struct RecordingItem: Codable, Identifiable, Equatable {
     enum Status: String, Codable {
         /// Recorded before recaps existed, or the recap was never asked for.

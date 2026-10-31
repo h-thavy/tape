@@ -50,7 +50,7 @@ An owner-provided Khmer/English OGG recording was tested separately with the pro
 
 The owner preferred the original Gemini-transcription → Claude-recap flow over the Gemini-only recap candidate. The installed original Tape app used its existing Anthropic key internally to recap the same fresh transcript. It completed normally with Claude Opus 5.5 (`end_turn`, about 37 seconds); the owner accepted that style. No key was exported or copied. This was a live comparison using the original installed app, not an end-to-end live run of the updated branch. The updated branch’s provider routing and error handling are covered by the repeatable native fixtures above.
 
-The original detailed English recap prompt is restored. Native normalization before splitting and high-reasoning transcription remain. Live output is nondeterministic: acronym recognition, missing facts and overgeneralization still warrant human review. Private recording details, transcripts, results and credentials remain excluded from Git.
+The original detailed English recap format is retained, with grounding instructions to preserve material figures and constraints, separate proposals from decisions, retain uncertainty in acronyms, avoid invented deadline precision and note an unfinished recording. Native normalization before splitting and high-reasoning transcription remain. Live output is nondeterministic: acronym recognition, missing facts and overgeneralization still warrant human review. Private recording details, transcripts, results and credentials remain excluded from Git.
 
 ## Changed files
 
