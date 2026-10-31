@@ -69,6 +69,12 @@ public enum RecapPrompts {
         ending with "Topics: <topic>, <topic> and <topic>." in the order they came up. If the recording's name \
         doesn't match what was discussed, say so first.>
 
+        ## សង្ខេប
+
+        - <2 to 4 bullets in Khmer: the most important points (decisions, problems, what happens next), one \
+        natural Khmer sentence each, for people who read Khmer first. Keep product names and English terms \
+        as said.>
+
         ## 1. <Topic>
 
         - **<Lead-in>:** <what was said, decided or asked, and why>
@@ -128,6 +134,12 @@ public enum RecapPrompts {
         clinic's manager joining for the last part. Topics: the booking flow, payments and the staff \
         dashboard, and the clinic's logo.
 
+        ## សង្ខេប
+
+        - អ្នកជំងឺអាចកក់ពេលដោយមិនចាំបាច់មានគណនី ប្រើតែលេខទូរស័ព្ទ និងលេខកូដ SMS ប៉ុណ្ណោះ។
+        - មានបញ្ហាកាត់ប្រាក់កក់ពីរដង ពេលអ៊ីនធឺណិតយឺត ដែលមិនទាន់ដោះស្រាយនៅឡើយ។
+        - អ្នកគ្រប់គ្រងនឹងបើកឱ្យអ្នកជំងឺប្រើប្រាស់ ពេលបញ្ហានេះត្រូវបានជួសជុលរួច។
+
         ## 1. Booking flow
 
         - **Slots:** patients pick a doctor, then a 15-minute slot. Fully booked days are greyed out.
@@ -170,7 +182,7 @@ public enum RecapPrompts {
         """
         Recording: "\(name)" (\(named ? "a real name: use it as the title" : "not a real name, only the call app and time: title the recap after what was discussed"))
         Date: \(date)
-        Length: \(length(seconds)); keep the recap under \(wordBudget(seconds)) words, the topic times line not counted
+        Length: \(length(seconds)); keep the recap under \(wordBudget(seconds)) words, the Khmer summary and the topic times line not counted
         Call app: \(app ?? "unknown")
         Transcript file: \(transcriptFile)
 
@@ -309,6 +321,8 @@ public struct RecapDocument: Equatable {
         return copy
     }
 
+    /// The short summary in Khmer (`## សង្ខេប`).
+    public private(set) var summary: [MarkdownBlock] = []
     public let title: String?
     /// The "Source: …" line.
     public let source: String?
@@ -322,6 +336,8 @@ public struct RecapDocument: Equatable {
         var intro: [MarkdownBlock] = []
         var sections: [Section] = []
         var current: (number: String?, title: String, time: Double?, blocks: [MarkdownBlock])?
+        var summary: [MarkdownBlock] = []
+        var inSummary = false
         func close() {
             if let current { sections.append(Section(number: current.number, title: current.title, time: current.time, blocks: current.blocks)) }
             current = nil
@@ -330,8 +346,12 @@ public struct RecapDocument: Equatable {
             switch block {
             case .heading(1, let text) where title == nil && current == nil && intro.isEmpty:
                 title = text
+            case .heading(let level, let text) where level <= 2 && text.trimmingCharacters(in: .whitespaces) == Self.summaryHeading:
+                close()
+                inSummary = true
             case .heading(let level, let text) where level <= 2:
                 close()
+                inSummary = false
                 if let dot = text.firstIndex(of: "."), !text[..<dot].isEmpty, text[..<dot].allSatisfy(\.isNumber) {
                     current = (String(text[..<dot]), text[text.index(after: dot)...].trimmingCharacters(in: .whitespaces), nil, [])
                 } else {
@@ -346,7 +366,7 @@ public struct RecapDocument: Equatable {
             case .paragraph(let text) where current == nil && source == nil && text.hasPrefix("Source:"):
                 source = String(text.dropFirst("Source:".count)).trimmingCharacters(in: .whitespaces)
             default:
-                if current != nil { current?.blocks.append(block) } else { intro.append(block) }
+                if inSummary { summary.append(block) } else if current != nil { current?.blocks.append(block) } else { intro.append(block) }
             }
         }
         close()
@@ -354,5 +374,9 @@ public struct RecapDocument: Equatable {
         self.source = source
         self.intro = intro
         self.sections = sections
+        self.summary = summary
     }
+
+    /// The heading of the Khmer summary ("Summary").
+    public static let summaryHeading = "សង្ខេប"
 }

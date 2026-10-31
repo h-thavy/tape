@@ -39,12 +39,14 @@ curl -fsSL https://raw.githubusercontent.com/h-thavy/tape/main/scripts/install.s
 - **Stops when the call ends.** The recording is encoded while you talk, so it's saved the moment the call
   ends, trimmed to where the call left the microphone.
 - **Writes the recap when you ask.** Press *Make recap* on a recording (or on the "Recording saved" card, or
-  for several at once) and it goes to Gemini (`gemini-3.8-flash`, the best at Khmer mixed with
+  for several at once) and it goes to Gemini, converted first to 16 kHz mono (what Gemini works from; about a
+  third of the upload) (`gemini-3.8-flash`, the best at Khmer mixed with
   English) for a timestamped transcript, then to Claude (Claude Opus 5.5) for the recap: what the meeting was,
   one section per topic with the decisions, details and open questions, and the next steps. Recordings over
   12 minutes go to Gemini in 10-minute parts (it fails on long audio in one go), with the speaker labels
   carried from one part to the next; a failure on Gemini's side is retried. Both are saved next to the
-  recording and shown in the app, where a map of the meeting shows who spoke when and where each topic
+  recording and shown in the app. The recap opens with **សង្ខេប**, 2 to 4 key points in Khmer, then the
+  detailed recap in English; in the app, a map of the meeting shows who spoke when and where each topic
   starts (click to play from there). Recaps use your keys' credits, so none is made until you ask, unless
   you turn on *Make recaps automatically* in Settings:
 

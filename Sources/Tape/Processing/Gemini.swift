@@ -24,15 +24,27 @@ struct Gemini {
     /// processing your request", every time, on a 32-minute call).
     static let partLength: Double = 10 * 60
 
-    func transcribe(_ audio: URL, prompt: String, progress: @escaping (String) -> Void) async throws -> String {
+    func transcribe(_ original: URL, prompt: String, progress: @escaping (String) -> Void) async throws -> String {
+        // Sent as Gemini hears it: 16 kHz mono (it reduces audio to that itself), about a third of the size.
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("tape-gemini-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        var audio = original
+        progress("Preparing the audio…")
+        let speech = folder.appendingPathComponent("speech.m4a")
+        do {
+            try await Self.speechAudio(original, to: speech)
+            audio = speech
+            let size = { (url: URL) in (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0 }
+            log.notice("Audio for Gemini: \(size(original) / 1024) KB → \(size(speech) / 1024) KB")
+        } catch {
+            log.error("Couldn't convert the audio (\(error.localizedDescription, privacy: .public)); sending it as it is")
+        }
         let duration = (try? await AVURLAsset(url: audio).load(.duration).seconds) ?? 0
         guard duration > Self.partLength * 1.2 else {
             return try await withRetry { try await transcribeFile(audio, prompt: prompt, progress: progress) }
         }
         let count = Int((duration / Self.partLength).rounded(.up))
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("tape-parts-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: folder) }
         var transcript: [String] = []
         for index in 0..<count {
             let start = Double(index) * Self.partLength
@@ -75,6 +87,53 @@ struct Gemini {
             attempt += 1
             try await Task.sleep(for: .seconds(attempt == 1 ? 5 : 20))
         }
+    }
+
+    /// The audio as speech for Gemini: 16 kHz mono AAC at 48 kbps (a call's 48 kHz stereo is reduced to this by
+    /// Gemini anyway).
+    private static func speechAudio(_ source: URL, to output: URL) async throws {
+        let asset = AVURLAsset(url: source)
+        guard let track = try await asset.loadTracks(withMediaType: .audio).first else { throw Failure(message: "The recording has no audio.") }
+        let reader = try AVAssetReader(asset: asset)
+        let pcm: [String: Any] = [AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 16_000, AVNumberOfChannelsKey: 1,
+                                  AVLinearPCMBitDepthKey: 16, AVLinearPCMIsFloatKey: false, AVLinearPCMIsBigEndianKey: false,
+                                  AVLinearPCMIsNonInterleaved: false]
+        let readerOutput = AVAssetReaderTrackOutput(track: track, outputSettings: pcm)
+        reader.add(readerOutput)
+        try? FileManager.default.removeItem(at: output)
+        let writer = try AVAssetWriter(outputURL: output, fileType: .m4a)
+        let input = AVAssetWriterInput(mediaType: .audio, outputSettings: [
+            AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 16_000, AVNumberOfChannelsKey: 1, AVEncoderBitRateKey: 48_000,
+        ])
+        input.expectsMediaDataInRealTime = false
+        writer.add(input)
+        guard reader.startReading(), writer.startWriting() else {
+            throw reader.error ?? writer.error ?? Failure(message: "Couldn't convert the audio.")
+        }
+        writer.startSession(atSourceTime: .zero)
+        let queue = DispatchQueue(label: "tape.speech-audio")
+        let finished: Bool = await withCheckedContinuation { done in
+            input.requestMediaDataWhenReady(on: queue) {
+                while input.isReadyForMoreMediaData {
+                    guard let buffer = readerOutput.copyNextSampleBuffer() else {
+                        input.markAsFinished()
+                        done.resume(returning: reader.status == .completed)
+                        return
+                    }
+                    if !input.append(buffer) {
+                        reader.cancelReading()
+                        done.resume(returning: false)
+                        return
+                    }
+                }
+            }
+        }
+        guard finished else {
+            writer.cancelWriting()
+            throw writer.error ?? reader.error ?? Failure(message: "Couldn't convert the audio.")
+        }
+        await writer.finishWriting()
+        guard writer.status == .completed else { throw writer.error ?? Failure(message: "Couldn't convert the audio.") }
     }
 
     /// `length` seconds of `audio` from `start`, as an .m4a (copied as it is when it's AAC, else re-encoded).
