@@ -290,8 +290,10 @@ struct Gemini {
         default:
             let errors = (interaction["errors"] as? [[String: Any]])?.compactMap { $0["message"] as? String }.joined(separator: " ")
             log.error("Interaction \(status, privacy: .public): \(errors ?? "", privacy: .public)")
+            // Some audio pieces repeatedly fail without an explicit truncation status. Retry the original
+            // piece first; after withRetry is exhausted, piece() applies the same bounded split recovery.
             throw Failure(message: "Gemini couldn't transcribe the recording (\(status): \(errors?.isEmpty == false ? errors! : "no reason given")).",
-                          retryable: status == "failed")
+                          retryable: status == "failed", splitAudio: status == "failed")
         }
     }
 

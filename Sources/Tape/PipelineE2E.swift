@@ -76,7 +76,7 @@ enum PipelineE2E {
                 retryProcessor.process(item.id)
                 item = try await wait(item.id)
                 try check(item.status == .ready, "Retry failed")
-            } else if ["empty-transcript", "empty-summary", "truncated-summary", "invalid-audio", "empty-audio", "refused-key", "refused-claude-key", "interrupted-summary", "refused-summary", "bounded-incomplete"].contains(scenario) {
+            } else if ["empty-transcript", "empty-summary", "truncated-summary", "invalid-audio", "empty-audio", "refused-key", "refused-claude-key", "interrupted-summary", "refused-summary", "bounded-incomplete", "bounded-failed"].contains(scenario) {
                 try check(item.status == .failed, "Expected failure, got \(item.status.rawValue)")
                 try check(Library.shared.recap(item) == nil, "Failure left a finished recap")
             } else {

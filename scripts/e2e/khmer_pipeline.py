@@ -89,6 +89,8 @@ def run_case(binary, folder, scenario, seconds=4, audio_path=None):
                         if scenario in ("changed-audio-retry", "corrupt-cache-retry"):
                             accepted_pcm.clear()
                         return self.reply({"error": {"message": "Quota reached"}}, 429)
+                    if scenario == "bounded-failed" or (scenario == "failed-recovery" and counts["transcriptions"] <= 3):
+                        return self.reply({"status": "failed", "errors": [{"message": "There was a problem processing your request."}]})
                     if scenario == "bounded-incomplete" or (scenario in ("incomplete-recovery", "continuation-recovery") and counts["transcriptions"] == 1):
                         return self.reply({"status": "requires_continuation" if scenario == "continuation-recovery" else "incomplete",
                                            "usage": {"total_output_tokens": 65536},
@@ -175,9 +177,9 @@ def run_case(binary, folder, scenario, seconds=4, audio_path=None):
     with source.open("rb") as stream:
         assert hashlib.file_digest(stream, "sha256").hexdigest() == source_hash, "Source audio changed"
     assert not any("fixture_error" in event for event in events), events
-    if scenario in ("success", "recap-failure-retry", "long-audio", "fallback-summary", "incomplete-recovery", "continuation-recovery", "empty-piece-recovery", "resume-transcription", "changed-audio-retry", "corrupt-cache-retry"):
+    if scenario in ("success", "recap-failure-retry", "long-audio", "fallback-summary", "incomplete-recovery", "continuation-recovery", "empty-piece-recovery", "resume-transcription", "changed-audio-retry", "corrupt-cache-retry", "failed-recovery"):
         expected_requests = {"long-audio": expected_parts, "incomplete-recovery": 3, "continuation-recovery": 3,
-                             "empty-piece-recovery": 3, "resume-transcription": 4, "changed-audio-retry": 5, "corrupt-cache-retry": 5}.get(scenario, 1)
+                             "empty-piece-recovery": 3, "resume-transcription": 4, "changed-audio-retry": 5, "corrupt-cache-retry": 5, "failed-recovery": 5}.get(scenario, 1)
         assert counts["transcriptions"] == expected_requests, counts
         assert "Discard incomplete text" not in receipt["transcript"]
         with wave.open(str(folder / "reference.wav")) as reference:
@@ -194,6 +196,8 @@ def run_case(binary, folder, scenario, seconds=4, audio_path=None):
         assert (folder / "transcript.png").stat().st_size > 10000
     elif scenario == "bounded-incomplete":
         assert counts["transcriptions"] == 3 and counts["summaries"] == 0, counts
+    elif scenario == "bounded-failed":
+        assert counts["transcriptions"] == 9 and counts["summaries"] == 0, counts
     elif scenario == "empty-transcript":
         assert counts["summaries"] == 0
     elif scenario in ("invalid-audio", "empty-audio", "missing-key", "missing-gemini-key", "missing-claude-key"):
@@ -224,7 +228,7 @@ def main():
     cases = ["success", "recap-failure-retry", "empty-transcript", "empty-summary", "truncated-summary",
              "invalid-audio", "empty-audio", "refused-key", "missing-key", "missing-gemini-key", "missing-claude-key",
              "refused-claude-key", "interrupted-summary", "refused-summary", "fallback-summary", "long-audio", "incomplete-recovery", "continuation-recovery", "empty-piece-recovery",
-             "bounded-incomplete", "resume-transcription", "changed-audio-retry", "corrupt-cache-retry"]
+             "bounded-incomplete", "resume-transcription", "changed-audio-retry", "corrupt-cache-retry", "failed-recovery", "bounded-failed"]
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=True)
     if args.audio:
@@ -232,7 +236,7 @@ def main():
                              args.audio_seconds, args.audio)]
     else:
         receipts = [run_case(Path(binpath) / "Tape", args.output / case, case,
-                        721 if case == "long-audio" else 604 if case in ("resume-transcription", "changed-audio-retry", "corrupt-cache-retry") else 240 if case in ("incomplete-recovery", "continuation-recovery", "empty-piece-recovery", "bounded-incomplete") else 0 if case == "empty-audio" else 4) for case in cases]
+                        721 if case == "long-audio" else 604 if case in ("resume-transcription", "changed-audio-retry", "corrupt-cache-retry") else 240 if case in ("incomplete-recovery", "continuation-recovery", "empty-piece-recovery", "bounded-incomplete", "failed-recovery", "bounded-failed") else 0 if case == "empty-audio" else 4) for case in cases]
     (args.output / "receipt.json").write_text(json.dumps({"passed": True, "mode": "local Gemini and Claude fixtures, supplied audio" if args.audio else "local Gemini and Claude fixtures, synthetic audio", "cases": receipts}, indent=2))
 
 
