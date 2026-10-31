@@ -8,10 +8,19 @@ import os
 /// and the uploaded file is deleted afterwards.
 struct Gemini {
     static let model = "gemini-3.8-flash"
+    static let summaryModel = "gemini-3.5-flash"
     private static let base = URL(string: "https://generativelanguage.googleapis.com")!
 
     let key: String
+    private let endpoint: URL
+    private let session: URLSession
     private let log = Logger(subsystem: "io.github.h-thavy.tape", category: "gemini")
+
+    init(key: String, endpoint: URL = Self.base, session: URLSession = .shared) {
+        self.key = key
+        self.endpoint = endpoint
+        self.session = session
+    }
 
     struct Failure: LocalizedError {
         let message: String
@@ -52,12 +61,58 @@ struct Gemini {
     }
 
     private func transcribeFile(_ audio: URL, prompt: String, progress: @escaping (String) -> Void) async throws -> String {
+        progress("Preparing 16 kHz mono audio…")
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("tape-wav-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let wav = folder.appendingPathComponent("audio.wav")
+        try await AudioPreparation.wav(from: audio, to: wav)
         progress("Uploading…")
-        let file = try await upload(audio)
-        defer { Task { try? await delete(file.name) } }
-        try await waitUntilActive(file.name)
-        progress("Transcribing…")
-        return try await interact(prompt: prompt, fileURI: file.uri, mimeType: file.mimeType)
+        let file = try await upload(wav)
+        do {
+            try await waitUntilActive(file.name)
+            progress("Transcribing…")
+            let transcript = try await interact(prompt: prompt, fileURI: file.uri, mimeType: file.mimeType)
+            await removeUpload(file.name)
+            return transcript
+        } catch {
+            await removeUpload(file.name)
+            throw error
+        }
+    }
+
+    private func removeUpload(_ name: String) async {
+        do { try await delete(name) }
+        catch { log.error("Couldn't delete uploaded audio from Gemini: \(error.localizedDescription, privacy: .public)") }
+    }
+
+    /// A second Gemini request receives only the saved transcript and returns 2–4 Khmer key points.
+    func summarize(_ transcript: String) async throws -> String {
+        guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw Failure(message: "The transcript is empty. Transcribe a recording first.")
+        }
+        return try await withRetry {
+            var call = request("v1beta/models/\(Self.summaryModel):generateContent", method: "POST", timeout: 180)
+            call.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            call.httpBody = try JSONSerialization.data(withJSONObject: [
+                "contents": [["parts": [["text": RecapPrompts.khmerSummary(transcript)]]]],
+                "generationConfig": ["temperature": 0, "maxOutputTokens": 2048, "thinkingConfig": ["thinkingBudget": 0]],
+            ])
+            let (data, _) = try await send(call)
+            let json = try parse(data)
+            guard let candidate = (json["candidates"] as? [[String: Any]])?.first,
+                  candidate["finishReason"] as? String == "STOP",
+                  let content = candidate["content"] as? [String: Any],
+                  let parts = content["parts"] as? [[String: Any]] else {
+                throw Failure(message: "Gemini didn't finish the recap. Your transcript is saved; try again.")
+            }
+            let text = parts.filter { $0["thought"] as? Bool != true }
+                .compactMap { $0["text"] as? String }.joined().trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else {
+                throw Failure(message: "Gemini returned an empty recap. Your transcript is saved; try again.")
+            }
+            return text
+        }
     }
 
     /// Tries again (twice, after 5 and 20 seconds) when Gemini fails on its side or the network drops; not
@@ -120,7 +175,7 @@ struct Gemini {
         upload.setValue(String(size), forHTTPHeaderField: "Content-Length")
         upload.setValue("0", forHTTPHeaderField: "X-Goog-Upload-Offset")
         upload.setValue("upload, finalize", forHTTPHeaderField: "X-Goog-Upload-Command")
-        let (data, response) = try await URLSession.shared.upload(for: upload, fromFile: audio)
+        let (data, response) = try await session.upload(for: upload, fromFile: audio)
         try check(data, response)
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let file = json["file"] as? [String: Any], let name = file["name"] as? String, let uri = file["uri"] as? String
@@ -184,9 +239,8 @@ struct Gemini {
         switch status {
         case "completed" where !text.isEmpty:
             return text
-        case "incomplete" where !text.isEmpty:
-            log.notice("Transcript cut short (incomplete); keeping what came back")
-            return text + "\n\n[The transcript stops here: the recording was too long to transcribe in one go.]"
+        case "incomplete":
+            throw Failure(message: "Gemini cut the transcript short. Try again or import a shorter recording.")
         default:
             let errors = (interaction["errors"] as? [[String: Any]])?.compactMap { $0["message"] as? String }.joined(separator: " ")
             log.error("Interaction \(status, privacy: .public): \(errors ?? "", privacy: .public)")
@@ -216,14 +270,14 @@ struct Gemini {
     // MARK: - HTTP
 
     private func request(_ path: String, method: String, timeout: TimeInterval = 120) -> URLRequest {
-        var request = URLRequest(url: Self.base.appendingPathComponent(path), timeoutInterval: timeout)
+        var request = URLRequest(url: endpoint.appendingPathComponent(path), timeoutInterval: timeout)
         request.httpMethod = method
         request.setValue(key, forHTTPHeaderField: "x-goog-api-key")
         return request
     }
 
     private func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         try check(data, response)
         return (data, response as! HTTPURLResponse)
     }

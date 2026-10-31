@@ -19,8 +19,15 @@ enum APIKeys {
 
     private static let keychainService = "io.github.h-thavy.tape"
     private static var cache: [Service: String?] = [:]
+    #if DEBUG
+    /// The native E2E runner never reads or writes the user's Keychain.
+    static var testKeys: [Service: String]?
+    #endif
 
     static func get(_ service: Service) -> String? {
+        #if DEBUG
+        if let testKeys { return testKeys[service] }
+        #endif
         if let cached = cache[service] { return cached }
         let key = read(service)
         cache[service] = key
@@ -57,5 +64,5 @@ enum APIKeys {
         SecItemAdd(item as CFDictionary, nil)
     }
 
-    static var complete: Bool { Service.allCases.allSatisfy { get($0) != nil } }
+    static var complete: Bool { APIKeys.get(.gemini) != nil }
 }

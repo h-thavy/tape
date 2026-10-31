@@ -223,7 +223,7 @@ struct RecapStatus: View {
         case .transcribing: "Transcribing"
         case .writing: "Writing recap"
         case .failed: "Recap failed"
-        case .waitingForKeys: "Needs API keys"
+        case .waitingForKeys: "Needs Gemini key"
         case .notProcessed: "No recap"
         }
     }
@@ -341,7 +341,7 @@ enum Importer {
                     id: "import", symbol: "square.and.arrow.down",
                     title: added.count == 1 ? "Imported" : "Imported \(added.count) recordings",
                     message: added.count == 1 ? first.displayTitle + (auto ? " · recap starts now" : "") : (auto ? "Their recaps start now" : nil),
-                    primary: auto ? open : .init(title: added.count == 1 ? "Make recap" : "Make recaps", symbol: "sparkles") {
+                    primary: auto ? open : .init(title: "Transcribe + summarize", symbol: "sparkles") {
                         for item in added { Processor.shared.process(item.id) }
                     },
                     secondary: auto ? nil : open,
@@ -367,10 +367,10 @@ struct ReaderPane: View {
             VStack(spacing: 14) {
                 TapeMarkView(size: 72)
                 Text("Your meetings appear here").font(Theme.display(20, .semibold))
-                Text("When a call starts, Tape asks whether to record it. When it ends, the recording is saved and turned into a transcript and a recap.")
+                Text("When a call starts, Tape asks whether to record it. When it ends, select Transcribe + summarize for a Khmer transcript and 2–4 key points.")
                     .font(Theme.sans(13.5)).foregroundStyle(Theme.ink2).multilineTextAlignment(.center).frame(maxWidth: 420)
                 if !settings.hasKeys {
-                    Button("Add API keys") { main.page = .settings }.buttonStyle(.pill)
+                    Button("Add Gemini key") { main.page = .settings }.buttonStyle(.pill)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -407,7 +407,7 @@ private struct SelectionPane: View {
                 let waiting = items.filter { $0.status == .notProcessed || $0.status == .failed }
                 if !waiting.isEmpty {
                     Button { for item in waiting { Processor.shared.process(item.id) } } label: {
-                        Label(waiting.count == 1 ? "Make 1 recap" : "Make \(waiting.count) recaps", systemImage: "sparkles")
+                        Label(waiting.count == 1 ? "Transcribe + summarize" : "Summarize \(waiting.count) recordings", systemImage: "sparkles")
                     }
                     .buttonStyle(.pillQuiet)
                 }
@@ -649,13 +649,13 @@ private struct StatusBanner: View {
             banner(icon: AnyView(Spinner(size: 13, color: Theme.working)), text: item.detail ?? "Waiting…",
                    detail: item.status == .transcribing ? "Gemini is listening to the call. A long meeting takes a few minutes." : nil)
         case .waitingForKeys:
-            banner(icon: AnyView(Image(systemName: "key").foregroundStyle(Theme.ink2)), text: "Add your API keys to get the recap.", detail: nil) {
+            banner(icon: AnyView(Image(systemName: "key").foregroundStyle(Theme.ink2)), text: "Add your Gemini API key to get the recap.", detail: nil) {
                 Button("Open Settings") { MainWindow.shared.page = .settings }.buttonStyle(.pillQuiet).controlSize(.small)
             }
         case .notProcessed:
             banner(icon: AnyView(Image(systemName: "sparkles").foregroundStyle(Theme.ink2)), text: "No recap yet",
-                   detail: "Gemini writes the transcript and Claude the recap, with your API keys (\(Self.estimate(item.duration))).") {
-                Button { Processor.shared.process(item.id) } label: { Label("Make recap", systemImage: "sparkles") }
+                   detail: "Gemini writes the Khmer transcript and a short Khmer recap of 2–4 key points, with your API key (\(Self.estimate(item.duration))).") {
+                Button { Processor.shared.process(item.id) } label: { Label("Transcribe + summarize", systemImage: "sparkles") }
                     .buttonStyle(.pill).controlSize(.small)
             }
         case .failed:
@@ -667,11 +667,11 @@ private struct StatusBanner: View {
     }
 
     /// Roughly what a recap of this length uses: audio is about 32 tokens a second for Gemini; the transcript
-    /// Claude reads is about 3 tokens a second of talk.
+    /// Gemini reads is about 3 tokens a second of talk.
     static func estimate(_ seconds: Double) -> String {
         let minutes = max(1, Int((seconds / 60).rounded()))
         let audio = Int(seconds * 32 / 1000), text = Int(seconds * 3 / 1000)
-        return "\(minutes) min of audio: about \(max(1, audio))k tokens for Gemini, \(max(1, text))k for Claude"
+        return "\(minutes) min of audio: about \(max(1, audio))k audio tokens and \(max(1, text))k transcript tokens for Gemini"
     }
 
     private func banner(icon: AnyView, text: String, detail: String?,

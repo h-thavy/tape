@@ -7,11 +7,18 @@ import os
 
 /// Tape records your calls and turns each one into a recap. When an app starts a call it asks whether to
 /// record it; the recording stops when the call ends, is in ~/Documents/Tape a moment later, and Gemini
-/// (the transcript) and Claude (the recap) take it from there. No account, no sign-in: your own API keys.
+/// writes the transcript and a short Khmer recap. No account, no sign-in: your own Gemini API key.
 @main
 enum TapeMain {
     static func main() {
         let app = NSApplication.shared
+        #if DEBUG
+        if CommandLine.arguments.dropFirst().first == "--pipeline-e2e" {
+            Task { @MainActor in await PipelineE2E.run() }
+            app.run()
+            return
+        }
+        #endif
         let delegate = AppDelegate()
         app.delegate = delegate
         app.setActivationPolicy(.regular)
@@ -26,7 +33,7 @@ enum Settings {
         set { UserDefaults.standard.set(newValue, forKey: "askOnCalls") }
     }
     /// Make each recording's recap as soon as it's saved or imported. Off: a recap is made when asked for
-    /// (each one uses the Gemini and Anthropic credits of your keys).
+    /// (each one uses the Gemini credits of your key).
     static var autoRecap: Bool {
         get { UserDefaults.standard.bool(forKey: "autoRecap") }
         set { UserDefaults.standard.set(newValue, forKey: "autoRecap") }
@@ -89,18 +96,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             return
         }
-        // Test hook: TAPE_TEST_RECAP=<transcript> TAPE_TEST_OUT=<file> writes a recap of that transcript with
-        // Claude (its topic times on the last line) and quits, touching nothing else.
+        // Test hook: TAPE_TEST_RECAP=<transcript> TAPE_TEST_OUT=<file> writes a short Khmer recap and quits.
         if let path = ProcessInfo.processInfo.environment["TAPE_TEST_RECAP"],
-           let out = ProcessInfo.processInfo.environment["TAPE_TEST_OUT"], let key = APIKeys.get(.anthropic) {
+           let out = ProcessInfo.processInfo.environment["TAPE_TEST_OUT"], let key = APIKeys.get(.gemini) {
             Task {
-                let transcript = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
-                let file = URL(fileURLWithPath: path).lastPathComponent
-                let request = RecapPrompts.recapRequest(recording: String(file.dropLast(".transcript.txt".count)), date: "31 October 2026",
-                                                        seconds: Transcript(transcript, duration: 0).turns.last?.end ?? 0, app: "Google Meet",
-                                                        transcriptFile: file, transcript: transcript)
                 do {
-                    let recap = try await Claude(key: key).recap(system: RecapPrompts.recapSystem, request: request)
+                    let transcript = try String(contentsOfFile: path, encoding: .utf8)
+                    let recap = try await Gemini(key: key).summarize(transcript)
                     try recap.write(toFile: out, atomically: true, encoding: .utf8)
                 } catch {
                     try? "FAILED: \(error.localizedDescription)".write(toFile: out, atomically: true, encoding: .utf8)

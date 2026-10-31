@@ -65,15 +65,14 @@ struct SettingsPage: View {
 
             section("Recaps") {
                 SettingsCard {
-                    KeyRow(service: .gemini, detail: "Listens to the call and writes the transcript, Khmer and English as spoken (Gemini 3.8 Flash).")
-                    KeyRow(service: .anthropic, detail: "Writes the recap from the transcript (Claude Opus 5.5).")
+                    KeyRow(service: .gemini, detail: "Transcribes Khmer speech, keeping English terms as spoken (Gemini 3.8 Flash), then writes 2–4 Khmer key points (Gemini 3.5 Flash).")
                     SettingsRow(title: "Make recaps automatically",
-                                detail: "Off: a recording waits until you press Make recap, so credits are only used for the calls you want recapped.",
+                                detail: "Off: a recording waits until you press Transcribe + summarize, so credits are only used for the calls you want recapped.",
                                 last: true) {
                         Toggle("Make recaps automatically", isOn: $settings.autoRecap).toggleStyle(.switch).labelsHidden()
                     }
                 }
-                Text("Keys stay in your Mac's Keychain. Recordings are sent to Google and Anthropic only to make their transcript and recap.")
+                Text("Your Gemini key stays in your Mac's Keychain. Audio is sent to Google for transcription, then a second Gemini call summarizes the transcript. No Anthropic key is needed.")
                     .font(Theme.sans(12.5)).foregroundStyle(Theme.ink3)
                     .fixedSize(horizontal: false, vertical: true)
             }
