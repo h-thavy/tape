@@ -65,7 +65,7 @@ struct SettingsPage: View {
 
             section("Recaps") {
                 SettingsCard {
-                    KeyRow(service: .gemini, detail: "Transcribes Khmer speech, keeping English terms as spoken (Gemini 3.8 Flash), then writes 2–4 Khmer key points (Gemini 3.5 Flash).")
+                    KeyRow(service: .gemini, detail: "Transcribes Khmer speech, keeping English terms as spoken (Gemini 3.8 Flash), then writes a detailed English meeting recap with decisions and next steps (Gemini 3.8 Flash).")
                     SettingsRow(title: "Make recaps automatically",
                                 detail: "Off: a recording waits until you press Transcribe + summarize, so credits are only used for the calls you want recapped.",
                                 last: true) {

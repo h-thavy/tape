@@ -50,6 +50,7 @@ enum PipelineE2E {
             receipt["transcript"] = Library.shared.transcript(item) ?? ""
             receipt["recap"] = Library.shared.recap(item) ?? ""
             if item.status == .ready {
+                try check(item.topicTimes?["1"] == 0, "Detailed recap lost its topic playback time")
                 MainWindow.shared.show(recording: item.id)
                 MainWindow.shared.tab = .recap
                 try await Task.sleep(for: .milliseconds(500))
@@ -71,7 +72,8 @@ enum PipelineE2E {
 
     private static func wait(_ id: String) async throws -> RecordingItem {
         for _ in 0..<1200 {
-            if let item = Library.shared.item(id), !item.isWorking { return item }
+            // The isolated library contains one item; its recap title can rename it after processing.
+            if let item = Library.shared.item(id) ?? Library.shared.items.first, !item.isWorking { return item }
             try await Task.sleep(for: .milliseconds(100))
         }
         throw Check.failed("Pipeline timed out")

@@ -367,7 +367,7 @@ struct ReaderPane: View {
             VStack(spacing: 14) {
                 TapeMarkView(size: 72)
                 Text("Your meetings appear here").font(Theme.display(20, .semibold))
-                Text("When a call starts, Tape asks whether to record it. When it ends, select Transcribe + summarize for a Khmer transcript and 2–4 key points.")
+                Text("When a call starts, Tape asks whether to record it. When it ends, select Transcribe + summarize for the full transcript and a detailed English meeting recap.")
                     .font(Theme.sans(13.5)).foregroundStyle(Theme.ink2).multilineTextAlignment(.center).frame(maxWidth: 420)
                 if !settings.hasKeys {
                     Button("Add Gemini key") { main.page = .settings }.buttonStyle(.pill)
@@ -647,14 +647,14 @@ private struct StatusBanner: View {
             EmptyView()
         case .queued, .transcribing, .writing:
             banner(icon: AnyView(Spinner(size: 13, color: Theme.working)), text: item.detail ?? "Waiting…",
-                   detail: item.status == .transcribing ? "Gemini is listening to the call. A long meeting takes a few minutes." : nil)
+                   detail: item.status == .transcribing ? "Gemini is listening to the call. Long meetings can take several minutes per part." : nil)
         case .waitingForKeys:
             banner(icon: AnyView(Image(systemName: "key").foregroundStyle(Theme.ink2)), text: "Add your Gemini API key to get the recap.", detail: nil) {
                 Button("Open Settings") { MainWindow.shared.page = .settings }.buttonStyle(.pillQuiet).controlSize(.small)
             }
         case .notProcessed:
             banner(icon: AnyView(Image(systemName: "sparkles").foregroundStyle(Theme.ink2)), text: "No recap yet",
-                   detail: "Gemini writes the Khmer transcript and a short Khmer recap of 2–4 key points, with your API key (\(Self.estimate(item.duration))).") {
+                   detail: "Gemini writes the Khmer/English transcript and a detailed English recap with decisions, open questions and next steps, with your API key (\(Self.estimate(item.duration))).") {
                 Button { Processor.shared.process(item.id) } label: { Label("Transcribe + summarize", systemImage: "sparkles") }
                     .buttonStyle(.pill).controlSize(.small)
             }

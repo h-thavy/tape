@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import math
 import struct
 import subprocess
 import threading
@@ -12,19 +13,23 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 TRANSCRIPT = "[00:00] Speaker 1: សួស្តី យើងនឹងប្រជុំនៅថ្ងៃស្អែក។\n[00:02] Speaker 2: យើងត្រូវរៀបចំរបាយការណ៍។"
-SUMMARY = "- ក្រុមការងារនឹងប្រជុំនៅថ្ងៃស្អែក។\n- ត្រូវរៀបចំរបាយការណ៍សម្រាប់កិច្ចប្រជុំ។"
+SUMMARY = '# "Team planning" — Meeting Recap\n\nSource: recording "meeting". Speakers are labelled by role.\n\nA short planning meeting. Topics: tomorrow’s meeting and the report.\n\n## 1. Meeting and report\n\n- **Plan:** meet tomorrow and prepare the report.\n\n## Next steps\n\n- Team: prepare the report.'
 
 
-def run_case(binary, folder, scenario, seconds=4):
+def run_case(binary, folder, scenario, seconds=4, audio_path=None):
     folder.mkdir(parents=True, exist_ok=True)
-    source = folder / "meeting.wav"
-    with wave.open(str(source), "wb") as audio:
-        audio.setparams((2, 2, 48000, 0, "NONE", "not compressed"))
-        # Synthetic stereo input deliberately differs from the required 16 kHz mono output.
-        frame = struct.pack("<hh", 400, -200) * 48000
-        for _ in range(seconds):
-            audio.writeframesraw(frame)
-    if scenario == "invalid-audio":
+    source = audio_path.resolve() if audio_path else folder / "meeting.wav"
+    if not audio_path:
+        with wave.open(str(source), "wb") as audio:
+            audio.setparams((2, 2, 48000, 0, "NONE", "not compressed"))
+            # Synthetic stereo input deliberately differs from the required 16 kHz mono output.
+            frame = struct.pack("<hh", 400, -200) * 48000
+            for _ in range(seconds):
+                audio.writeframesraw(frame)
+    expected_parts = math.ceil(seconds / 600) if seconds > 720 else 1
+    summary = SUMMARY.replace('recording "meeting"', f'recording "{source.stem}"')
+    uploaded_seconds = []
+    if scenario == "invalid-audio" and not audio_path:
         source.write_bytes(b"not an audio recording")
     with source.open("rb") as stream:
         source_hash = hashlib.file_digest(stream, "sha256").hexdigest()
@@ -64,19 +69,21 @@ def run_case(binary, folder, scenario, seconds=4):
                         assert audio.getnchannels() == 1
                         assert audio.getsampwidth() == 2
                         assert audio.getnframes() > 0
+                        uploaded_seconds.append(audio.getnframes() / audio.getframerate())
                     self.reply({"file": {"name": "files/fixture", "uri": "fixture://audio", "mimeType": "audio/wav"}})
                 elif self.path == "/v1beta/interactions":
                     counts["transcriptions"] += 1
                     payload = json.loads(body)
                     assert payload["model"] == "gemini-3.8-flash"
+                    assert payload["generation_config"]["thinking_level"] == "high"
                     assert any(p.get("type") == "audio" and p.get("mime_type") == "audio/wav" for p in payload["input"])
                     assert "Khmer" in payload["input"][0]["text"]
                     if scenario == "long-audio" and counts["transcriptions"] == 2:
-                        assert "part 2 of 2" in payload["input"][0]["text"]
+                        assert f"part 2 of {expected_parts}" in payload["input"][0]["text"]
                         assert "<previous>" in payload["input"][0]["text"]
                     text = "" if scenario == "empty-transcript" else TRANSCRIPT
                     self.reply({"status": "completed", "steps": [{"type": "model_output", "content": [{"type": "text", "text": text}]}]})
-                elif self.path == "/v1beta/models/gemini-3.5-flash:generateContent":
+                elif self.path == "/v1beta/models/gemini-3.8-flash:generateContent":
                     counts["summaries"] += 1
                     payload = json.loads(body)
                     parts = payload["contents"][0]["parts"]
@@ -84,10 +91,13 @@ def run_case(binary, folder, scenario, seconds=4):
                     assert all(line in parts[0]["text"] for line in TRANSCRIPT.splitlines())
                     if scenario == "long-audio":
                         assert "[10:00]" in parts[0]["text"] and "[10:02]" in parts[0]["text"]
-                    assert "២-៤" in parts[0]["text"]
+                    system = payload["systemInstruction"]["parts"][0]["text"]
+                    assert "Write the recap in English" in system
+                    assert "Next steps" in system and "never by a personal name" in system
+                    assert payload["generationConfig"]["thinkingConfig"]["thinkingLevel"] == "high"
                     if scenario == "recap-failure-retry" and counts["summaries"] == 1:
                         return self.reply({"error": {"message": "Quota reached"}}, 429)
-                    text = "" if scenario == "empty-summary" else SUMMARY
+                    text = "" if scenario == "empty-summary" else summary + "\n\n[topic times] 1=00:00"
                     finish = "MAX_TOKENS" if scenario == "truncated-summary" else "STOP"
                     self.reply({"candidates": [{"finishReason": finish, "content": {"parts": [
                         {"text": "Internal reasoning must not appear in the recap.", "thought": True}, {"text": text}
@@ -124,9 +134,11 @@ def run_case(binary, folder, scenario, seconds=4):
         assert hashlib.file_digest(stream, "sha256").hexdigest() == source_hash, "Source audio changed"
     assert not any("fixture_error" in event for event in events), events
     if scenario in ("success", "recap-failure-retry", "long-audio"):
-        assert counts["transcriptions"] == (2 if scenario == "long-audio" else 1), counts
+        assert counts["transcriptions"] == (expected_parts if scenario == "long-audio" else 1), counts
         assert counts["summaries"] == (2 if scenario == "recap-failure-retry" else 1), counts
-        assert receipt["recap"].strip() == SUMMARY
+        # Tape renames the recording and its source reference from the recap title.
+        expected = summary.replace(f'Source: recording "{source.stem}"', 'Source: recording "Team planning"')
+        assert receipt["recap"].strip() == expected
         assert all(line in receipt["transcript"] for line in TRANSCRIPT.splitlines())
         assert (folder / "recap.png").stat().st_size > 10000
         assert (folder / "transcript.png").stat().st_size > 10000
@@ -135,6 +147,12 @@ def run_case(binary, folder, scenario, seconds=4):
     elif scenario in ("invalid-audio", "empty-audio", "missing-key"):
         assert counts["uploads"] == 0 and counts["summaries"] == 0
     assert counts["deletes"] == counts["uploads"], counts
+    if scenario == "long-audio":
+        assert abs(sum(uploaded_seconds) - seconds) < expected_parts * 0.1, uploaded_seconds
+        (folder / "audio-duration.json").write_text(json.dumps({
+            "source_seconds": seconds, "uploaded_seconds": uploaded_seconds,
+            "difference_seconds": sum(uploaded_seconds) - seconds,
+        }, indent=2))
     print(f"PASS {scenario}: {folder / 'receipt.json'}")
     return {"scenario": scenario, "passed": True, "counts": counts}
 
@@ -143,7 +161,11 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, default=ROOT / "build/e2e")
     parser.add_argument("--skip-build", action="store_true")
+    parser.add_argument("--audio", type=Path, help="Optional local recording; still uses fixture Gemini replies")
+    parser.add_argument("--audio-seconds", type=float, help="Independently measured decoded duration for --audio")
     args = parser.parse_args()
+    if args.audio and (not args.audio.is_file() or not args.audio_seconds or args.audio_seconds <= 720):
+        parser.error("--audio requires an existing recording and --audio-seconds greater than 720")
     if not args.skip_build:
         subprocess.run(["swift", "build", "--product", "Tape"], cwd=ROOT, check=True)
     binpath = subprocess.check_output(["swift", "build", "--show-bin-path"], cwd=ROOT, text=True).strip()
@@ -151,9 +173,13 @@ def main():
              "invalid-audio", "empty-audio", "refused-key", "missing-key", "long-audio"]
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=True)
-    receipts = [run_case(Path(binpath) / "Tape", args.output / case, case,
+    if args.audio:
+        receipts = [run_case(Path(binpath) / "Tape", args.output / "real-audio", "long-audio",
+                             args.audio_seconds, args.audio)]
+    else:
+        receipts = [run_case(Path(binpath) / "Tape", args.output / case, case,
                         721 if case == "long-audio" else 0 if case == "empty-audio" else 4) for case in cases]
-    (args.output / "receipt.json").write_text(json.dumps({"passed": True, "mode": "local Gemini fixtures, synthetic audio", "cases": receipts}, indent=2))
+    (args.output / "receipt.json").write_text(json.dumps({"passed": True, "mode": "local Gemini fixtures, supplied audio" if args.audio else "local Gemini fixtures, synthetic audio", "cases": receipts}, indent=2))
 
 
 if __name__ == "__main__":

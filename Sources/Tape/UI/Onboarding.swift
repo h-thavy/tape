@@ -130,7 +130,7 @@ private struct OnboardingView: View {
             "Any call, in any app. The recording is saved the moment the call ends, sounding exactly like the call, and you can turn it into a transcript and a recap. No account: your recordings stay on this Mac.",
             "Zoom, Google Meet, Teams, Slack, WhatsApp… when an app starts a call, Tape asks in the notch. One click records, and it stops by itself when the call ends.",
             "While you're muted in the meeting, your mic is left out of the recording entirely. Unmute to speak and it's recorded again. The others are always recorded.",
-            "Import audio or record a call, then press Transcribe + summarize. Gemini writes the Khmer transcript, keeping English terms as spoken, then a second Gemini call writes 2–4 Khmer key points. Both appear in Tape. Only the calls you choose use your credits.",
+            "Import audio or record a call, then press Transcribe + summarize. Gemini writes the Khmer transcript, keeping English terms as spoken, then a second Gemini call writes a detailed English recap with topics, decisions and next steps. Both appear in Tape. Only the calls you choose use your credits.",
             "Tape needs your microphone (your voice), system audio recording (the other people), and Accessibility (to see the call's mute button). Nothing leaves your Mac except to make a recap.",
             "Transcripts and recaps use one Gemini API key, kept in your Mac's Keychain. You can also add it later in Settings.",
             "Tape waits in the notch and the menu bar. Hover over the notch any time to record, import a recording or open Tape.",

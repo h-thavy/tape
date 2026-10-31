@@ -1,7 +1,7 @@
 # Tape
 
 Records your calls on a Mac and turns each one into a meeting recap: Gemini writes the transcript
-(Khmer and English terms as spoken), then a second Gemini call writes 2–4 Khmer key points. No account, no sign-in: add your own Gemini API key.
+(Khmer and English terms as spoken), then a second Gemini call writes a detailed English meeting recap. No account, no sign-in: add your own Gemini API key.
 
 ## Install
 
@@ -41,9 +41,12 @@ curl -fsSL https://raw.githubusercontent.com/h-thavy/tape/main/scripts/install.s
   *Transcribe + summarize* on a recording (or on the "Recording saved" card, or for several at once).
   Tape prepares a temporary **16 kHz mono PCM WAV** using native macOS audio decoding, preserving the
   original. Gemini (`gemini-3.8-flash`) writes the timestamped Khmer transcript, keeping English terms as
-  spoken. A second, text-only Gemini call (`gemini-3.5-flash`) writes a short Khmer recap of **2–4 key points**.
+  spoken. A second, text-only Gemini call (`gemini-3.8-flash`) writes a detailed **English meeting recap**:
+  context, topic sections, decisions, open questions and next steps by owner. Topic timestamps link back
+  to the recording. Both calls use high reasoning; processing a long meeting can take several minutes.
   Both appear in the recording's **Transcript** and **Recap** tabs and are saved next to the audio.
-  Recordings over 12 minutes are transcribed in 10-minute parts, with timestamps and speaker labels carried
+  Tape normalizes before splitting, avoiding inaccurate source-format timelines. Recordings over 12 minutes
+  are transcribed in 10-minute parts, with timestamps and speaker labels carried
   forward. If the recap fails, retrying reuses the saved transcript. Processing starts only when you ask,
   unless you turn on *Make recaps automatically* in Settings. No Flask, Python server, FFmpeg or Anthropic
   key is required:
@@ -63,7 +66,7 @@ curl -fsSL https://raw.githubusercontent.com/h-thavy/tape/main/scripts/install.s
   turned off; while it can't see the mute button, the notch and the window say so. (Needs Accessibility. A browser shows only its visible tab, so while a browser call's tab is in
   the background Tape keeps the last state it saw.)
 - **Keeps the meeting name.** A recording takes the meeting's title when its window shows one ("Meet – Weekly sync",
-  "Pricing review | Microsoft Teams"), otherwise the date and call app. Imports keep their file names. Click the title to rename it. Its files
+  "Pricing review | Microsoft Teams"), otherwise the topic from the recap. Imports start with their file names. Click the title to rename it. Its files
   take the name (`<name>.m4a`, `.transcript.txt`, `.recap.md`), and it appears in Tape.
 - **Library.** ⌘-click or ⇧-click to pick several recordings, then move them to the Trash (Finder's Put Back
   restores them). *Copy recording* puts the audio file on the clipboard, to paste into a chat, an email or
@@ -123,7 +126,7 @@ island's states as PNGs, and quits; `--env TAPE_TEST_VERSION=0.1.0
 ## Layout
 
 - `Sources/TapeCore`: pure logic, unit tested. `TapeMix.swift` (mixer, echo handling, mute timeline),
-  `MicLine.swift` (lining the mic up with the call, cross-fades), `Recap.swift` (the Gemini prompts and legacy detailed recap format, the recap's Markdown and topics), `Transcript.swift` (lines, speakers and turns, parts' times), `CallRules.swift` (which apps are calls, mute button wording).
+  `MicLine.swift` (lining the mic up with the call, cross-fades), `Recap.swift` (the Gemini prompts and detailed recap format, the recap's Markdown and topics), `Transcript.swift` (lines, speakers and turns, parts' times), `CallRules.swift` (which apps are calls, mute button wording).
 - `Sources/Tape`: the app. `CallCapture` (tap + aggregate device, microphones), `TapeWriter` (mix and
   encode), `Recordings` (folder, repackaging, crash recovery), `Library` (recordings and their files),
   `Processing/` (Gemini, native WAV preparation, the Keychain, the pipeline; the legacy Claude client is unused), `CallWatcher`, `MuteWatcher`, `Recorder`,
@@ -132,7 +135,7 @@ island's states as PNGs, and quits; `--env TAPE_TEST_VERSION=0.1.0
   `TapeApp` (app and menu bar).
 - `scripts/`: build, release, install and icon scripts.
 
-## Verify the Khmer pipeline
+## Verify the transcription and recap pipeline
 
 `python3 scripts/e2e/khmer_pipeline.py` runs the native debug app against a local Gemini fixture service,
 using synthetic stereo audio and dummy credentials. It covers success, missing/refused keys, invalid audio,

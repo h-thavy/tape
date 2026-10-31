@@ -8,7 +8,7 @@ import os
 /// and the uploaded file is deleted afterwards.
 struct Gemini {
     static let model = "gemini-3.8-flash"
-    static let summaryModel = "gemini-3.5-flash"
+    static let summaryModel = "gemini-3.8-flash"
     private static let base = URL(string: "https://generativelanguage.googleapis.com")!
 
     let key: String
@@ -34,19 +34,24 @@ struct Gemini {
     static let partLength: Double = 10 * 60
 
     func transcribe(_ audio: URL, prompt: String, progress: @escaping (String) -> Void) async throws -> String {
-        let duration = (try? await AVURLAsset(url: audio).load(.duration).seconds) ?? 0
-        guard duration > Self.partLength * 1.2 else {
-            return try await withRetry { try await transcribeFile(audio, prompt: prompt, progress: progress) }
-        }
-        let count = Int((duration / Self.partLength).rounded(.up))
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("tape-parts-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
+        // Some formats (notably OGG) report a different asset timeline from their decoded audio. Cutting
+        // that timeline can repeat speech at boundaries. Normalize first, then split the decoded timeline.
+        progress("Preparing 16 kHz mono audio…")
+        let prepared = folder.appendingPathComponent("recording.wav")
+        try await AudioPreparation.wav(from: audio, to: prepared)
+        let duration = try await AVURLAsset(url: prepared).load(.duration).seconds
+        guard duration > Self.partLength * 1.2 else {
+            return try await withRetry { try await transcribePrepared(prepared, prompt: prompt, progress: progress) }
+        }
+        let count = Int((duration / Self.partLength).rounded(.up))
         var transcript: [String] = []
         for index in 0..<count {
             let start = Double(index) * Self.partLength
             let part = folder.appendingPathComponent("part \(index + 1).m4a")
-            try await Self.cut(audio, from: start, length: min(Self.partLength, duration - start), to: part)
+            try await Self.cut(prepared, from: start, length: min(Self.partLength, duration - start), to: part)
             // The end of the part before, so the same voices keep the same labels.
             let previous = transcript.last.map { $0.components(separatedBy: "\n").suffix(12).joined(separator: "\n") }
             let text = try await withRetry {
@@ -67,6 +72,10 @@ struct Gemini {
         defer { try? FileManager.default.removeItem(at: folder) }
         let wav = folder.appendingPathComponent("audio.wav")
         try await AudioPreparation.wav(from: audio, to: wav)
+        return try await transcribePrepared(wav, prompt: prompt, progress: progress)
+    }
+
+    private func transcribePrepared(_ wav: URL, prompt: String, progress: @escaping (String) -> Void) async throws -> String {
         progress("Uploading…")
         let file = try await upload(wav)
         do {
@@ -86,17 +95,18 @@ struct Gemini {
         catch { log.error("Couldn't delete uploaded audio from Gemini: \(error.localizedDescription, privacy: .public)") }
     }
 
-    /// A second Gemini request receives only the saved transcript and returns 2–4 Khmer key points.
-    func summarize(_ transcript: String) async throws -> String {
-        guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw Failure(message: "The transcript is empty. Transcribe a recording first.")
+    /// A second, text-only Gemini request writes the detailed English meeting recap.
+    func recap(system: String, request recapRequest: String) async throws -> String {
+        guard !recapRequest.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw Failure(message: "The recap request is empty. Transcribe a recording first.")
         }
         return try await withRetry {
             var call = request("v1beta/models/\(Self.summaryModel):generateContent", method: "POST", timeout: 180)
             call.setValue("application/json", forHTTPHeaderField: "Content-Type")
             call.httpBody = try JSONSerialization.data(withJSONObject: [
-                "contents": [["parts": [["text": RecapPrompts.khmerSummary(transcript)]]]],
-                "generationConfig": ["temperature": 0, "maxOutputTokens": 2048, "thinkingConfig": ["thinkingBudget": 0]],
+                "systemInstruction": ["parts": [["text": system]]],
+                "contents": [["parts": [["text": recapRequest]]]],
+                "generationConfig": ["temperature": 0, "maxOutputTokens": 16384, "thinkingConfig": ["thinkingLevel": "high"]],
             ])
             let (data, _) = try await send(call)
             let json = try parse(data)
@@ -209,7 +219,7 @@ struct Gemini {
                 ["type": "text", "text": prompt],
                 ["type": "audio", "uri": fileURI, "mime_type": mimeType],
             ],
-            "generation_config": ["thinking_level": "low", "max_output_tokens": 65_536],
+            "generation_config": ["thinking_level": "high", "max_output_tokens": 65_536],
             "background": true,
         ]
         var create = request("v1beta/interactions", method: "POST", timeout: 1800)

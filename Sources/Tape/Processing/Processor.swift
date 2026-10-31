@@ -2,7 +2,7 @@ import AppKit
 import TapeCore
 import os
 
-/// Turns each finished recording into a transcript and a short Khmer recap, using two Gemini calls.
+/// Turns each recording into a Khmer/English transcript and detailed English recap using two Gemini calls.
 /// The transcript is kept, so a failed recap is retried without transcribing again.
 @MainActor
 final class Processor {
@@ -77,12 +77,19 @@ final class Processor {
                 log.notice("Transcribed \(id, privacy: .public) in \(Int(Date().timeIntervalSince(started))) s (\(text.count) characters)")
             }
             library.update(id) { $0.status = .writing; $0.detail = "Writing the recap…" }
-            let recap = RecapFormat.flattened(try await gemini.summarize(transcript ?? ""))
+            let name = library.item(id)?.name
+            let request = RecapPrompts.recapRequest(
+                recording: name ?? item.id, named: name != nil || item.app == nil,
+                date: item.created.formatted(.dateTime.day().month(.wide).year().hour().minute()),
+                seconds: item.duration, app: item.app,
+                transcriptFile: library.transcriptURL(item).lastPathComponent, transcript: transcript ?? "")
+            let (reply, times) = RecapFormat.splitTopicTimes(try await gemini.recap(system: RecapPrompts.recapSystem, request: request))
+            let recap = RecapFormat.flattened(reply)
             try (recap + "\n").write(to: library.recapURL(item), atomically: true, encoding: .utf8)
             library.update(id) {
                 $0.status = .ready
                 $0.detail = nil
-                $0.topicTimes = nil
+                $0.topicTimes = times.isEmpty ? nil : times
                 $0.title = RecapFormat.title(of: recap)
                 // Not named after the meeting (or by you): named after what it was about.
                 if $0.name == nil, let title = $0.title, !Library.fileSafe(title).isEmpty { $0.name = Library.fileSafe(title) }

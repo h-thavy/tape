@@ -7,7 +7,7 @@ import os
 
 /// Tape records your calls and turns each one into a recap. When an app starts a call it asks whether to
 /// record it; the recording stops when the call ends, is in ~/Documents/Tape a moment later, and Gemini
-/// writes the transcript and a short Khmer recap. No account, no sign-in: your own Gemini API key.
+/// writes the transcript and a detailed English recap. No account, no sign-in: your own Gemini API key.
 @main
 enum TapeMain {
     static func main() {
@@ -96,13 +96,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             return
         }
-        // Test hook: TAPE_TEST_RECAP=<transcript> TAPE_TEST_OUT=<file> writes a short Khmer recap and quits.
+        // Test hook: TAPE_TEST_RECAP=<transcript> TAPE_TEST_OUT=<file> writes a detailed English recap and quits.
         if let path = ProcessInfo.processInfo.environment["TAPE_TEST_RECAP"],
            let out = ProcessInfo.processInfo.environment["TAPE_TEST_OUT"], let key = APIKeys.get(.gemini) {
             Task {
                 do {
                     let transcript = try String(contentsOfFile: path, encoding: .utf8)
-                    let recap = try await Gemini(key: key).summarize(transcript)
+                    let source = URL(fileURLWithPath: path)
+                    let request = RecapPrompts.recapRequest(
+                        recording: source.deletingPathExtension().deletingPathExtension().lastPathComponent, named: true,
+                        date: Date().formatted(), seconds: Transcript(transcript, duration: 0).turns.last?.end ?? 0,
+                        app: nil, transcriptFile: source.lastPathComponent, transcript: transcript)
+                    let recap = try await Gemini(key: key).recap(system: RecapPrompts.recapSystem, request: request)
                     try recap.write(toFile: out, atomically: true, encoding: .utf8)
                 } catch {
                     try? "FAILED: \(error.localizedDescription)".write(toFile: out, atomically: true, encoding: .utf8)
