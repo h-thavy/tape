@@ -37,7 +37,9 @@ enum PipelineE2E {
                 MainWindow.shared.show(recording: imported.id)
             }
             func gemini() -> Gemini {
-                Gemini(key: "fixture-key", endpoint: endpoint, preparedAudio: { url in
+                Gemini(key: "fixture-key", endpoint: endpoint,
+                       maximumConcurrentPieces: ["resume-transcription", "changed-audio-retry", "corrupt-cache-retry"].contains(scenario) ? 1 : 3,
+                       preparedAudio: { url in
                     try Data(contentsOf: url).write(to: folder.appendingPathComponent("reference.wav"), options: .atomic)
                 })
             }
@@ -49,12 +51,20 @@ enum PipelineE2E {
             var item = try await wait(imported.id)
             if missingKey {
                 try check(item.status == .waitingForKeys, "Missing key must wait for Settings")
-            } else if ["recap-failure-retry", "resume-transcription", "changed-audio-retry", "corrupt-cache-retry"].contains(scenario) {
+            } else if ["recap-failure-retry", "resume-transcription", "changed-audio-retry", "corrupt-cache-retry", "parallel-resume"].contains(scenario) {
                 try check(item.status == .failed, "Expected the initial processing request to fail")
                 if scenario == "recap-failure-retry" {
                     try check(Library.shared.transcript(item)?.isEmpty == false, "Failed recap lost the transcript")
                 } else {
                     try check(Library.shared.transcript(item) == nil, "Partial transcript was marked complete")
+                }
+                if scenario == "parallel-resume" {
+                    let url = Recordings.inProgress.deletingLastPathComponent()
+                        .appendingPathComponent("Transcription").appendingPathComponent(item.id + ".json")
+                    let state = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
+                    let pieces = state?["pieces"] as? [String: String] ?? [:]
+                    try check(["0:4800000", "9600000:4800000", "14400000:4800000"].allSatisfy { pieces[$0] != nil }, "A failed peer lost completed out-of-order pieces")
+                    receipt["checkpoint_piece_keys_before_retry"] = pieces.keys.sorted()
                 }
                 if scenario == "changed-audio-retry" {
                     let url = Library.shared.audioURL(item)

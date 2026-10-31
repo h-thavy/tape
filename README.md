@@ -46,8 +46,9 @@ curl -fsSL https://raw.githubusercontent.com/h-thavy/tape/main/scripts/install.s
   to the recording. Both calls use high reasoning; processing a long meeting can take several minutes.
   Both appear in the recording's **Transcript** and **Recap** tabs and are saved next to the audio.
   Tape normalizes before splitting, avoiding inaccurate source-format timelines. Audio is transcribed in
-  pieces of up to five minutes, with timestamps and speaker context carried forward. An incomplete or empty
-  piece is retried as two smaller pieces, with bounded recovery. Completed pieces and the exact working WAV
+  pieces of up to five minutes. After the first piece establishes speaker context, up to three pieces run
+  concurrently and are merged chronologically. An incomplete, empty or repeatedly failed piece is retried
+  as two smaller pieces, with bounded recovery. Completed pieces and the exact working WAV
   are saved locally so retrying after a failure or restart resumes progress. Changed audio or prompts
   invalidate that checkpoint. If the recap fails, retrying reuses the saved full transcript. Processing starts
   only when you ask,
@@ -143,7 +144,8 @@ island's states as PNGs, and quits; `--env TAPE_TEST_VERSION=0.1.0
 
 `python3 scripts/e2e/khmer_pipeline.py` runs the native debug app against a local Gemini and Claude fixture service,
 using synthetic stereo audio and dummy credentials. It covers success, missing/refused keys, invalid audio,
-empty/truncated responses, recursive chunk recovery, restart/resume, changed/corrupt caches, long recordings
+empty/truncated responses, recursive chunk recovery, bounded processing failures, restart/resume,
+out-of-order parallel replies and checkpoints, changed/corrupt caches, long recordings
 and retrying a failed recap without re-transcription. It compares completed audio pieces sample-for-sample
 with their normalized source and writes repeatable receipts, uploaded WAVs, transcripts, recaps and native reader snapshots to `build/e2e/`.
 This verifies integration, not live model accuracy. See [verification details](docs/khmer-pipeline-verification.md).

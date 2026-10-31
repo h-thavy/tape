@@ -35,7 +35,7 @@ public enum RecapPrompts {
             text += """
 
 
-                The previous part ended like this. Use the same speaker labels for the same voices, without \
+                An earlier part ended like this. Use the same speaker labels for the same voices, without \
                 explaining or discussing the labels, and don't repeat these lines:
                 <previous>
                 \(previous)

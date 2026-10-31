@@ -4,9 +4,11 @@ import argparse
 import hashlib
 import json
 import math
+import re
 import struct
 import subprocess
 import threading
+import time
 import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -21,16 +23,20 @@ def run_case(binary, folder, scenario, seconds=4, audio_path=None):
     source = audio_path.resolve() if audio_path else folder / "meeting.wav"
     if not audio_path:
         with wave.open(str(source), "wb") as audio:
-            audio.setparams((2, 2, 48000, 0, "NONE", "not compressed"))
+            rate = 8000 if seconds > 60 else 48000
+            audio.setparams((2, 2, rate, 0, "NONE", "not compressed"))
             # Synthetic stereo input deliberately differs from the required 16 kHz mono output.
-            frame = struct.pack("<hh", 400, -200) * 48000
-            for _ in range(seconds):
-                audio.writeframesraw(frame)
+            for second in range(seconds):
+                audio.writeframesraw(struct.pack("<hh", 400 + second % 1000, -200) * rate)
     expected_parts = math.ceil(seconds / 300)
     summary = SUMMARY.replace('recording "meeting"', f'recording "{source.stem}"')
     uploaded_seconds = []
     accepted_pcm = []
-    last_pcm = b""
+    uploads = {}
+    lock = threading.Lock()
+    active = peak_active = 0
+    requests_by_start = {}
+    completion_order = []
     if scenario == "invalid-audio" and not audio_path:
         source.write_bytes(b"not an audio recording")
     with source.open("rb") as stream:
@@ -52,8 +58,55 @@ def run_case(binary, folder, scenario, seconds=4, audio_path=None):
             self.end_headers()
             self.wfile.write(data)
 
+        def transcribe(self, payload):
+            nonlocal active, peak_active
+            audio = next(p for p in payload["input"] if p.get("type") == "audio")
+            upload = uploads[int(audio["uri"].rsplit("/", 1)[1])]
+            start = upload["start_frame"]
+            with lock:
+                counts["transcriptions"] += 1
+                request_number = counts["transcriptions"]
+                requests_by_start[start] = requests_by_start.get(start, 0) + 1
+                attempt = requests_by_start[start]
+                active += 1
+                peak_active = max(peak_active, active)
+            try:
+                assert payload["model"] == "gemini-3.8-flash"
+                assert payload["generation_config"]["thinking_level"] == "high"
+                assert audio["mime_type"] == "audio/wav"
+                assert "Khmer" in payload["input"][0]["text"]
+                if start and scenario in ("long-audio", "parallel-order", "parallel-resume", "parallel-incomplete"):
+                    assert "<previous>" in payload["input"][0]["text"]
+                if scenario.startswith("parallel-"):
+                    # Finish later pieces first; verify real overlap rather than a speed estimate.
+                    time.sleep({4800000: 1.8, 9600000: 0.15, 14400000: 0.45}.get(start, 0.05))
+                if scenario in ("resume-transcription", "changed-audio-retry", "corrupt-cache-retry") and request_number == 2:
+                    if scenario in ("changed-audio-retry", "corrupt-cache-retry"):
+                        accepted_pcm.clear()
+                    return self.reply({"error": {"message": "Quota reached"}}, 429)
+                if scenario == "parallel-resume" and start == 4800000 and attempt == 1:
+                    return self.reply({"error": {"message": "Quota reached"}}, 429)
+                if scenario == "bounded-failed" or (scenario == "failed-recovery" and request_number <= 3):
+                    return self.reply({"status": "failed", "errors": [{"message": "There was a problem processing your request."}]})
+                incomplete = scenario == "bounded-incomplete" or (scenario in ("incomplete-recovery", "continuation-recovery") and request_number == 1)
+                incomplete |= scenario == "parallel-incomplete" and start == 4800000 and upload["frames"] == 4800000
+                if incomplete:
+                    return self.reply({"status": "requires_continuation" if scenario == "continuation-recovery" else "incomplete",
+                                       "usage": {"total_output_tokens": 65536},
+                                       "steps": [{"type": "model_output", "content": [{"type": "text", "text": "[00:00] Speaker 1: Discard incomplete text"}]}]})
+                text = "" if scenario == "empty-transcript" or (scenario == "empty-piece-recovery" and request_number == 1) else TRANSCRIPT
+                if text and scenario.startswith("parallel-"):
+                    text += f"\n[00:02] Speaker 1: Fixture piece starts at {start // 16000}."
+                if text:
+                    with lock:
+                        accepted_pcm.append((start, upload["pcm"]))
+                self.reply({"status": "completed", "steps": [{"type": "model_output", "content": [{"type": "text", "text": text}]}]})
+            finally:
+                with lock:
+                    active -= 1
+                    completion_order.append(start)
+
         def do_POST(self):
-            nonlocal last_pcm
             try:
                 body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
                 events.append({"method": "POST", "path": self.path})
@@ -62,43 +115,28 @@ def run_case(binary, folder, scenario, seconds=4, audio_path=None):
                     assert self.headers["x-goog-api-key"] == "fixture-key"
                     if scenario == "refused-key":
                         return self.reply({"error": {"message": "API key invalid"}}, 403)
-                    self.reply({}, headers={"X-Goog-Upload-URL": f"http://127.0.0.1:{self.server.server_port}/upload-bytes"})
-                elif self.path == "/upload-bytes":
-                    counts["uploads"] += 1
-                    uploaded = folder / f"uploaded-{counts['uploads']}.wav"
+                    name = json.loads(body)["file"]["display_name"]
+                    start, frames = map(int, name.removesuffix(".wav").split(":"))
+                    with lock:
+                        token = len(uploads) + 1
+                        uploads[token] = {"start_frame": start, "frames": frames}
+                    self.reply({}, headers={"X-Goog-Upload-URL": f"http://127.0.0.1:{self.server.server_port}/upload-bytes/{token}"})
+                elif self.path.startswith("/upload-bytes/"):
+                    token = int(self.path.rsplit("/", 1)[1])
+                    with lock:
+                        counts["uploads"] += 1
+                        uploads[token]["pcm"] = body[44:]
+                    uploaded = folder / f"uploaded-{token}.wav"
                     uploaded.write_bytes(body)
-                    last_pcm = body[44:]
                     with wave.open(str(uploaded)) as audio:
                         assert audio.getframerate() == 16000
                         assert audio.getnchannels() == 1
                         assert audio.getsampwidth() == 2
                         assert audio.getnframes() > 0
                         uploaded_seconds.append(audio.getnframes() / audio.getframerate())
-                    self.reply({"file": {"name": "files/fixture", "uri": "fixture://audio", "mimeType": "audio/wav"}})
+                    self.reply({"file": {"name": f"files/fixture-{token}", "uri": f"fixture://audio/{token}", "mimeType": "audio/wav"}})
                 elif self.path == "/v1beta/interactions":
-                    counts["transcriptions"] += 1
-                    payload = json.loads(body)
-                    assert payload["model"] == "gemini-3.8-flash"
-                    assert payload["generation_config"]["thinking_level"] == "high"
-                    assert any(p.get("type") == "audio" and p.get("mime_type") == "audio/wav" for p in payload["input"])
-                    assert "Khmer" in payload["input"][0]["text"]
-                    if scenario == "long-audio" and counts["transcriptions"] == 2:
-                        assert f"part 2 of {expected_parts}" in payload["input"][0]["text"]
-                        assert "<previous>" in payload["input"][0]["text"]
-                    if scenario in ("resume-transcription", "changed-audio-retry", "corrupt-cache-retry") and counts["transcriptions"] == 2:
-                        if scenario in ("changed-audio-retry", "corrupt-cache-retry"):
-                            accepted_pcm.clear()
-                        return self.reply({"error": {"message": "Quota reached"}}, 429)
-                    if scenario == "bounded-failed" or (scenario == "failed-recovery" and counts["transcriptions"] <= 3):
-                        return self.reply({"status": "failed", "errors": [{"message": "There was a problem processing your request."}]})
-                    if scenario == "bounded-incomplete" or (scenario in ("incomplete-recovery", "continuation-recovery") and counts["transcriptions"] == 1):
-                        return self.reply({"status": "requires_continuation" if scenario == "continuation-recovery" else "incomplete",
-                                           "usage": {"total_output_tokens": 65536},
-                                           "steps": [{"type": "model_output", "content": [{"type": "text", "text": "[00:00] Speaker 1: Discard incomplete text"}]}]})
-                    text = "" if scenario == "empty-transcript" or (scenario == "empty-piece-recovery" and counts["transcriptions"] == 1) else TRANSCRIPT
-                    if text:
-                        accepted_pcm.append(last_pcm)
-                    self.reply({"status": "completed", "steps": [{"type": "model_output", "content": [{"type": "text", "text": text}]}]})
+                    self.transcribe(json.loads(body))
                 elif self.path == "/v1/messages":
                     counts["summaries"] += 1
                     payload = json.loads(body)
@@ -114,6 +152,9 @@ def run_case(binary, folder, scenario, seconds=4, audio_path=None):
                     assert all(line in text_input for line in TRANSCRIPT.splitlines())
                     if scenario == "long-audio":
                         assert "[05:00]" in text_input and "[10:00]" in text_input
+                    if scenario.startswith("parallel-"):
+                        starts = list(map(int, re.findall(r"Fixture piece starts at (\d+)", text_input)))
+                        assert starts == sorted(start // 16000 for start, _ in accepted_pcm), "Claude received unordered or missing pieces"
                     system = payload["system"]
                     assert "Write the recap in English" in system
                     assert "Next steps" in system and "never guess a name" in system
@@ -157,7 +198,8 @@ def run_case(binary, folder, scenario, seconds=4, audio_path=None):
             self.reply({"state": "ACTIVE"})
 
         def do_DELETE(self):
-            counts["deletes"] += 1
+            with lock:
+                counts["deletes"] += 1
             events.append({"method": "DELETE", "path": self.path})
             self.reply({})
 
@@ -170,20 +212,22 @@ def run_case(binary, folder, scenario, seconds=4, audio_path=None):
         (folder / "native.log").write_text(result.stdout + result.stderr)
     finally:
         server.shutdown()
-    (folder / "http.json").write_text(json.dumps({"counts": counts, "events": events}, indent=2))
+    concurrency = {"peak_active": peak_active, "completion_order": completion_order, "requests_by_start": requests_by_start}
+    (folder / "http.json").write_text(json.dumps({"counts": counts, "events": events, "concurrency": concurrency}, indent=2))
     assert result.returncode == 0, f"{scenario}: native app failed; see {folder}/native.log"
     receipt = json.loads((folder / "receipt.json").read_text())
     assert receipt["passed"], receipt
     with source.open("rb") as stream:
         assert hashlib.file_digest(stream, "sha256").hexdigest() == source_hash, "Source audio changed"
     assert not any("fixture_error" in event for event in events), events
-    if scenario in ("success", "recap-failure-retry", "long-audio", "fallback-summary", "incomplete-recovery", "continuation-recovery", "empty-piece-recovery", "resume-transcription", "changed-audio-retry", "corrupt-cache-retry", "failed-recovery"):
+    if scenario in ("success", "recap-failure-retry", "long-audio", "fallback-summary", "incomplete-recovery", "continuation-recovery", "empty-piece-recovery", "resume-transcription", "changed-audio-retry", "corrupt-cache-retry", "failed-recovery", "parallel-order", "parallel-resume", "parallel-incomplete"):
         expected_requests = {"long-audio": expected_parts, "incomplete-recovery": 3, "continuation-recovery": 3,
-                             "empty-piece-recovery": 3, "resume-transcription": 4, "changed-audio-retry": 5, "corrupt-cache-retry": 5, "failed-recovery": 5}.get(scenario, 1)
+                             "empty-piece-recovery": 3, "resume-transcription": 4, "changed-audio-retry": 5, "corrupt-cache-retry": 5, "failed-recovery": 5,
+                             "parallel-order": 5, "parallel-resume": 6, "parallel-incomplete": 7}.get(scenario, 1)
         assert counts["transcriptions"] == expected_requests, counts
         assert "Discard incomplete text" not in receipt["transcript"]
         with wave.open(str(folder / "reference.wav")) as reference:
-            assert b"".join(accepted_pcm) == reference.readframes(reference.getnframes()), "Pieces lost, repeated or altered PCM frames"
+            assert b"".join(pcm for _, pcm in sorted(accepted_pcm)) == reference.readframes(reference.getnframes()), "Pieces lost, repeated or altered PCM frames"
         # Allow codec/resampler padding; the exact coverage check above uses the same prepared WAV.
         assert abs(receipt["duration"] - seconds) < 0.05
         assert receipt["player_duration"] == receipt["duration"]
@@ -203,6 +247,12 @@ def run_case(binary, folder, scenario, seconds=4, audio_path=None):
     elif scenario in ("invalid-audio", "empty-audio", "missing-key", "missing-gemini-key", "missing-claude-key"):
         assert counts["uploads"] == 0 and counts["summaries"] == 0
     assert counts["deletes"] == counts["uploads"], counts
+    if scenario.startswith("parallel-"):
+        assert peak_active == 3, concurrency
+        assert completion_order.index(9600000) < completion_order.index(4800000), concurrency
+        if scenario == "parallel-resume":
+            assert all(requests_by_start[start] == 1 for start in (0, 9600000, 14400000)), concurrency
+            assert completion_order.index(19200000) > len(completion_order) - 3, "A new batch started after failure"
     if scenario == "long-audio":
         assert abs(sum(uploaded_seconds) - seconds) < expected_parts * 0.1, uploaded_seconds
         (folder / "audio-duration.json").write_text(json.dumps({
@@ -210,7 +260,7 @@ def run_case(binary, folder, scenario, seconds=4, audio_path=None):
             "difference_seconds": sum(uploaded_seconds) - seconds,
         }, indent=2))
     print(f"PASS {scenario}: {folder / 'receipt.json'}")
-    return {"scenario": scenario, "passed": True, "counts": counts}
+    return {"scenario": scenario, "passed": True, "counts": counts, "concurrency": concurrency}
 
 
 def main():
@@ -228,7 +278,7 @@ def main():
     cases = ["success", "recap-failure-retry", "empty-transcript", "empty-summary", "truncated-summary",
              "invalid-audio", "empty-audio", "refused-key", "missing-key", "missing-gemini-key", "missing-claude-key",
              "refused-claude-key", "interrupted-summary", "refused-summary", "fallback-summary", "long-audio", "incomplete-recovery", "continuation-recovery", "empty-piece-recovery",
-             "bounded-incomplete", "resume-transcription", "changed-audio-retry", "corrupt-cache-retry", "failed-recovery", "bounded-failed"]
+             "bounded-incomplete", "resume-transcription", "changed-audio-retry", "corrupt-cache-retry", "failed-recovery", "bounded-failed", "parallel-order", "parallel-resume", "parallel-incomplete"]
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=True)
     if args.audio:
@@ -236,7 +286,7 @@ def main():
                              args.audio_seconds, args.audio)]
     else:
         receipts = [run_case(Path(binpath) / "Tape", args.output / case, case,
-                        721 if case == "long-audio" else 604 if case in ("resume-transcription", "changed-audio-retry", "corrupt-cache-retry") else 240 if case in ("incomplete-recovery", "continuation-recovery", "empty-piece-recovery", "bounded-incomplete", "failed-recovery", "bounded-failed") else 0 if case == "empty-audio" else 4) for case in cases]
+                        1204 if case.startswith("parallel-") else 721 if case == "long-audio" else 604 if case in ("resume-transcription", "changed-audio-retry", "corrupt-cache-retry") else 240 if case in ("incomplete-recovery", "continuation-recovery", "empty-piece-recovery", "bounded-incomplete", "failed-recovery", "bounded-failed") else 0 if case == "empty-audio" else 4) for case in cases]
     (args.output / "receipt.json").write_text(json.dumps({"passed": True, "mode": "local Gemini and Claude fixtures, supplied audio" if args.audio else "local Gemini and Claude fixtures, synthetic audio", "cases": receipts}, indent=2))
 
 

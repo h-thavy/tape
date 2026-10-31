@@ -14,14 +14,17 @@ struct Gemini {
     private let endpoint: URL
     private let session: URLSession
     private let preparedAudio: ((URL) throws -> Void)?
+    private let maximumConcurrentPieces: Int
     private let log = Logger(subsystem: "io.github.h-thavy.tape", category: "gemini")
 
     init(key: String, endpoint: URL = Self.base, session: URLSession = .shared,
+         maximumConcurrentPieces: Int = 3,
          preparedAudio: ((URL) throws -> Void)? = nil) {
         self.key = key
         self.endpoint = endpoint
         self.session = session
         self.preparedAudio = preparedAudio
+        self.maximumConcurrentPieces = max(1, min(maximumConcurrentPieces, 3))
     }
 
     struct Failure: LocalizedError {
@@ -36,11 +39,37 @@ struct Gemini {
     static let partLength: Double = 5 * 60
     private static let minimumPiece: Int = 60 * AudioPreparation.sampleRate
 
-    private struct Checkpoint: Codable {
+    private struct Checkpoint: Codable, Sendable {
         var fingerprint: String
         var preparedDigest: String?
         var pieces: [String: String] = [:]
         var split: Set<String> = []
+    }
+
+    /// Serialize read/modify/write operations while independent audio pieces finish out of order.
+    private actor CheckpointStore {
+        private var state: Checkpoint
+        private let url: URL?
+
+        init(_ state: Checkpoint, url: URL?) {
+            self.state = state
+            self.url = url
+        }
+
+        func text(_ key: String) -> String? { state.pieces[key] }
+        func wasSplit(_ key: String) -> Bool { state.split.contains(key) }
+        func complete(_ key: String, text: String) throws {
+            state.pieces[key] = text
+            try save()
+        }
+        func split(_ key: String) throws {
+            state.split.insert(key)
+            try save()
+        }
+        private func save() throws {
+            guard let url else { return }
+            try JSONEncoder().encode(state).write(to: url, options: .atomic)
+        }
     }
 
     func transcribe(_ audio: URL, prompt: String, checkpoint: URL? = nil,
@@ -61,7 +90,7 @@ struct Gemini {
             return hash.finalize().map { String(format: "%02x", $0) }.joined()
         }
         // Hash original bytes: separate decodes can differ through resampling/dither and end padding.
-        let fingerprint = try digest(audio, suffix: Self.model + "|high|300s-pcm-v2|" + prompt +
+        let fingerprint = try digest(audio, suffix: Self.model + "|high|300s-pcm-v3|" + prompt +
             RecapPrompts.transcription(part: 1, of: 1, previous: "checkpoint context"))
         var state = Checkpoint(fingerprint: fingerprint)
         var prepared = folder.appendingPathComponent("recording.wav")
@@ -99,16 +128,18 @@ struct Gemini {
         await preparedDuration(Double(total) / Double(rate))
         let pieceFrames = Int(Self.partLength) * rate
         let count = (total + pieceFrames - 1) / pieceFrames
+        let sharedAudio = prepared
+        let store = CheckpointStore(state, url: checkpoint)
         func piece(start: Int, frames: Int, label: String, number: Int, previous: String?) async throws -> String {
             try Task.checkCancellation()
             let key = "\(start):\(frames)"
-            if let saved = state.pieces[key], !saved.isEmpty {
+            if let saved = await store.text(key), !saved.isEmpty {
                 progress("\(label): reusing saved transcript…")
                 return saved
             }
-            if !state.split.contains(key) {
+            if !(await store.wasSplit(key)) {
                 let wav = folder.appendingPathComponent("\(key).wav")
-                try AudioPreparation.slice(prepared, start: start, count: frames, to: wav)
+                try AudioPreparation.slice(sharedAudio, start: start, count: frames, to: wav)
                 defer { try? FileManager.default.removeItem(at: wav) }
                 let context = RecapPrompts.transcription(part: number, of: count, previous: previous)
                 let requestPrompt = prompt + "\n\n" + context.replacingOccurrences(of: RecapPrompts.transcription, with: "")
@@ -119,16 +150,14 @@ struct Gemini {
                     let cleaned = Transcript.cleanedPart(raw)
                     guard !cleaned.isEmpty else { throw Failure(message: "Gemini returned no transcript lines.", splitAudio: true) }
                     let text = Transcript.shifted(cleaned, by: Double(start) / Double(rate))
-                    state.pieces[key] = text
-                    try save()
+                    try await store.complete(key, text: text)
                     log.notice("Completed audio piece at \(start / rate) s, length \(Double(frames) / Double(rate)) s")
                     return text
                 } catch let failure as Failure where failure.splitAudio {
                     guard frames > Self.minimumPiece else {
                         throw Failure(message: "Gemini couldn't finish even a short audio piece. Completed pieces are saved; try again.")
                     }
-                    state.split.insert(key)
-                    try save()
+                    try await store.split(key)
                     progress("\(label): retrying in smaller pieces…")
                 }
             }
@@ -137,16 +166,34 @@ struct Gemini {
             let second = try await piece(start: start + half, frames: frames - half, label: label + ".2", number: number,
                                          previous: first.components(separatedBy: "\n").suffix(12).joined(separator: "\n"))
             let text = first + "\n\n" + second
-            state.pieces[key] = text
-            try save()
+            try await store.complete(key, text: text)
             return text
         }
-        var transcript: [String] = []
-        for index in 0..<count {
+        func part(_ index: Int, previous: String?) async throws -> String {
             let start = index * pieceFrames
-            let previous = transcript.last.map { $0.components(separatedBy: "\n").suffix(12).joined(separator: "\n") }
-            transcript.append(try await piece(start: start, frames: min(pieceFrames, total - start),
-                                             label: "Part \(index + 1) of \(count)", number: index + 1, previous: previous))
+            return try await piece(start: start, frames: min(pieceFrames, total - start),
+                                   label: "Part \(index + 1) of \(count)", number: index + 1, previous: previous)
+        }
+        // Establish speaker labels before parallel work. Each window shares the most recent completed
+        // context; recursive children remain sequential within their slot and never exceed the limit.
+        var transcript = [try await part(0, previous: nil)]
+        for lower in stride(from: 1, to: count, by: maximumConcurrentPieces) {
+            let previous = transcript.last?.components(separatedBy: "\n").suffix(12).joined(separator: "\n")
+            let upper = min(lower + maximumConcurrentPieces, count)
+            let batch = await withTaskGroup(of: (Int, Result<String, Error>).self) { group in
+                for index in lower..<upper {
+                    group.addTask {
+                        do { return (index, .success(try await part(index, previous: previous))) }
+                        catch { return (index, .failure(error)) }
+                    }
+                }
+                // Drain the window even after a failure, preserving successful peers and upload cleanup.
+                // Do not launch another window or Claude until all results in this one have succeeded.
+                var results: [(Int, Result<String, Error>)] = []
+                for await result in group { results.append(result) }
+                return results.sorted { $0.0 < $1.0 }
+            }
+            for (_, result) in batch { transcript.append(try result.get()) }
         }
         return transcript.joined(separator: "\n\n")
     }
