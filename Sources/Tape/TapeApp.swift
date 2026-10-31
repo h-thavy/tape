@@ -7,7 +7,7 @@ import os
 
 /// Tape records your calls and turns each one into a recap. When an app starts a call it asks whether to
 /// record it; the recording stops when the call ends, is in ~/Documents/Tape a moment later, and Gemini
-/// writes the transcript and a detailed English recap. No account, no sign-in: your own Gemini API key.
+/// writes the transcript, then Claude writes a detailed English recap. Your own Gemini and Anthropic keys.
 @main
 enum TapeMain {
     static func main() {
@@ -33,7 +33,7 @@ enum Settings {
         set { UserDefaults.standard.set(newValue, forKey: "askOnCalls") }
     }
     /// Make each recording's recap as soon as it's saved or imported. Off: a recap is made when asked for
-    /// (each one uses the Gemini credits of your key).
+    /// (each one uses your Gemini and Anthropic credits).
     static var autoRecap: Bool {
         get { UserDefaults.standard.bool(forKey: "autoRecap") }
         set { UserDefaults.standard.set(newValue, forKey: "autoRecap") }
@@ -98,7 +98,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         // Test hook: TAPE_TEST_RECAP=<transcript> TAPE_TEST_OUT=<file> writes a detailed English recap and quits.
         if let path = ProcessInfo.processInfo.environment["TAPE_TEST_RECAP"],
-           let out = ProcessInfo.processInfo.environment["TAPE_TEST_OUT"], let key = APIKeys.get(.gemini) {
+           let out = ProcessInfo.processInfo.environment["TAPE_TEST_OUT"], let key = APIKeys.get(.anthropic) {
             Task {
                 do {
                     let transcript = try String(contentsOfFile: path, encoding: .utf8)
@@ -107,7 +107,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                         recording: source.deletingPathExtension().deletingPathExtension().lastPathComponent, named: true,
                         date: Date().formatted(), seconds: Transcript(transcript, duration: 0).turns.last?.end ?? 0,
                         app: nil, transcriptFile: source.lastPathComponent, transcript: transcript)
-                    let recap = try await Gemini(key: key).recap(system: RecapPrompts.recapSystem, request: request)
+                    let recap = try await Claude(key: key).recap(system: RecapPrompts.recapSystem, request: request)
                     try recap.write(toFile: out, atomically: true, encoding: .utf8)
                 } catch {
                     try? "FAILED: \(error.localizedDescription)".write(toFile: out, atomically: true, encoding: .utf8)

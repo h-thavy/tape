@@ -2,7 +2,7 @@
 import AppKit
 import Foundation
 
-/// Runs the real native import → conversion → Gemini → save → reader flow with a loopback fixture API.
+/// Runs the real native import → conversion → Gemini → Claude → save → reader flow with a loopback fixture API.
 /// Called before normal startup, so it never starts call detection or touches personal recordings or keys.
 @MainActor
 enum PipelineE2E {
@@ -14,7 +14,12 @@ enum PipelineE2E {
         var receipt: [String: Any] = ["passed": false, "scenario": scenario, "mode": "fixture"]
         do {
             Recordings.testingRoot = folder.appendingPathComponent(UUID().uuidString, isDirectory: true)
-            APIKeys.testKeys = scenario == "missing-key" ? [:] : [.gemini: "fixture-key"]
+            let missingKey = ["missing-key", "missing-gemini-key", "missing-claude-key"].contains(scenario)
+            APIKeys.testKeys = [.gemini: "fixture-key", .anthropic: "fixture-claude-key"]
+            if scenario == "missing-key" { APIKeys.testKeys = [:] }
+            if scenario == "missing-gemini-key" { APIKeys.testKeys?.removeValue(forKey: .gemini) }
+            if scenario == "missing-claude-key" { APIKeys.testKeys?.removeValue(forKey: .anthropic) }
+            try check(APIKeys.complete == !missingKey, "Setup must require both API keys")
             Recordings.prepareFolders()
             Library.shared.load()
             Fonts.register()
@@ -25,12 +30,19 @@ enum PipelineE2E {
                 MainWindow.shared.show(recording: imported.id)
                 try await Task.sleep(for: .milliseconds(500))
                 MainWindow.shared.pipelineSnapshot(to: folder.appendingPathComponent("before-processing.png"))
+                MainWindow.shared.show(page: .settings)
+                try await Task.sleep(for: .milliseconds(500))
+                MainWindow.shared.pipelineSnapshot(to: folder.appendingPathComponent("settings.png"))
+                Onboarding.snapshot(to: folder)
+                MainWindow.shared.show(recording: imported.id)
             }
-            let processor = scenario == "missing-key" ? Processor(notify: false)
-                : Processor(gemini: Gemini(key: "fixture-key", endpoint: endpoint), notify: false)
+            let processor = missingKey ? Processor(notify: false)
+                : Processor(gemini: Gemini(key: "fixture-key", endpoint: endpoint),
+                            claude: Claude(key: "fixture-claude-key", endpoint: endpoint.appendingPathComponent("v1/messages")),
+                            notify: false)
             processor.process(imported.id)
             var item = try await wait(imported.id)
-            if scenario == "missing-key" {
+            if missingKey {
                 try check(item.status == .waitingForKeys, "Missing key must wait for Settings")
             } else if scenario == "recap-failure-retry" {
                 try check(item.status == .failed, "Expected first summary request to fail")
@@ -39,7 +51,7 @@ enum PipelineE2E {
                 processor.process(item.id)
                 item = try await wait(item.id)
                 try check(item.status == .ready, "Retry failed")
-            } else if ["empty-transcript", "empty-summary", "truncated-summary", "invalid-audio", "empty-audio", "refused-key"].contains(scenario) {
+            } else if ["empty-transcript", "empty-summary", "truncated-summary", "invalid-audio", "empty-audio", "refused-key", "refused-claude-key", "interrupted-summary", "refused-summary"].contains(scenario) {
                 try check(item.status == .failed, "Expected failure, got \(item.status.rawValue)")
                 try check(Library.shared.recap(item) == nil, "Failure left a finished recap")
             } else {

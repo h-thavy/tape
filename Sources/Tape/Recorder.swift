@@ -188,7 +188,7 @@ final class Recorder: ObservableObject {
                 let open = Toast.Action(title: "Open") { MainWindow.shared.show(recording: id) }
                 Toast.shared.show(.init(
                     id: "saved", symbol: "checkmark.circle", title: "Recording saved", detail: Counter.text(seconds),
-                    message: [title, auto ? (APIKeys.complete ? "Recap starts now" : "Add Gemini key for a recap") : nil]
+                    message: [title, auto ? (APIKeys.complete ? "Recap starts now" : "Add API keys for a recap") : nil]
                         .compactMap { $0 }.joined(separator: " · ").nilIfEmpty,
                     primary: auto ? open : .init(title: "Transcribe + summarize", symbol: "sparkles") { Processor.shared.process(id) },
                     secondary: auto ? nil : open,

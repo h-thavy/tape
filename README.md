@@ -1,7 +1,7 @@
 # Tape
 
 Records your calls on a Mac and turns each one into a meeting recap: Gemini writes the transcript
-(Khmer and English terms as spoken), then a second Gemini call writes a detailed English meeting recap. No account, no sign-in: add your own Gemini API key.
+(Khmer and English terms as spoken), then Claude writes a detailed English meeting recap. No account, no sign-in: add your own Gemini and Anthropic API keys.
 
 ## Install
 
@@ -11,7 +11,7 @@ Paste this into Terminal:
 curl -fsSL https://raw.githubusercontent.com/h-thavy/tape/main/scripts/install.sh | bash
 ```
 
-Then open **Settings** in Tape and add a [Gemini API key](https://aistudio.google.com/apikey). That one key is used for transcription and recap generation. Needs macOS 14.2 or later on Apple Silicon.
+Then open **Settings** in Tape and add a [Gemini API key](https://aistudio.google.com/apikey) for transcription and an [Anthropic API key](https://platform.claude.com/) for recaps. Needs macOS 14.2 or later on Apple Silicon.
 
 <details>
 <summary><b>Uninstall</b></summary>
@@ -41,15 +41,14 @@ curl -fsSL https://raw.githubusercontent.com/h-thavy/tape/main/scripts/install.s
   *Transcribe + summarize* on a recording (or on the "Recording saved" card, or for several at once).
   Tape prepares a temporary **16 kHz mono PCM WAV** using native macOS audio decoding, preserving the
   original. Gemini (`gemini-3.8-flash`) writes the timestamped Khmer transcript, keeping English terms as
-  spoken. A second, text-only Gemini call (`gemini-3.8-flash`) writes a detailed **English meeting recap**:
+  spoken. A text-only Claude call (`claude-opus-5-5`) writes a detailed **English meeting recap**:
   context, topic sections, decisions, open questions and next steps by owner. Topic timestamps link back
   to the recording. Both calls use high reasoning; processing a long meeting can take several minutes.
   Both appear in the recording's **Transcript** and **Recap** tabs and are saved next to the audio.
   Tape normalizes before splitting, avoiding inaccurate source-format timelines. Recordings over 12 minutes
   are transcribed in 10-minute parts, with timestamps and speaker labels carried
   forward. If the recap fails, retrying reuses the saved transcript. Processing starts only when you ask,
-  unless you turn on *Make recaps automatically* in Settings. No Flask, Python server, FFmpeg or Anthropic
-  key is required:
+  unless you turn on *Make recaps automatically* in Settings. No Flask, Python server or FFmpeg is required:
 
   ```
   ~/Documents/Tape/2026-10-30 14.05 Google Meet in Opera GX.m4a
@@ -99,9 +98,9 @@ meeting map is adjustable with VoiceOver (15 s steps), and animations stop under
 ## Privacy
 
 Recordings, transcripts and recaps are saved in `~/Documents/Tape`. To process one, a temporary 16 kHz mono
-WAV is sent to Google (Gemini) for transcription, then its transcript is sent to Gemini for the recap, using
-your key. Tape attempts to delete the uploaded audio after transcription, including on failure, and removes
-the local working WAV. Your Gemini API key is kept in the macOS Keychain. Existing saved recaps remain readable.
+WAV is sent to Google (Gemini) for transcription, then its transcript is sent to Anthropic (Claude) for the recap, using
+your respective keys. Tape attempts to delete the uploaded audio after transcription, including on failure, and removes
+the local working WAV. Your API keys are kept in the macOS Keychain. Existing saved recaps remain readable.
 
 ## Build from source
 
@@ -109,7 +108,7 @@ the local working WAV. Your Gemini API key is kept in the macOS Keychain. Existi
 scripts/build-app.sh        # → build/Tape.app, signed with your Apple Development identity
 open build/Tape.app
 swift test                  # existing mixer, mic alignment, prompts, transcripts and recaps checks
-python3 scripts/e2e/khmer_pipeline.py  # native pipeline E2E, local Gemini fixtures and saved artifacts
+python3 scripts/e2e/khmer_pipeline.py  # native pipeline E2E, local Gemini and Claude fixtures and saved artifacts
 scripts/release.sh          # dist/Tape.zip for a GitHub release (--publish to upload it)
 swift scripts/make-icon.swift   # the cassette icon (same geometry as TapeMark, which also draws the menu bar icon)
 ```
@@ -126,10 +125,10 @@ island's states as PNGs, and quits; `--env TAPE_TEST_VERSION=0.1.0
 ## Layout
 
 - `Sources/TapeCore`: pure logic, unit tested. `TapeMix.swift` (mixer, echo handling, mute timeline),
-  `MicLine.swift` (lining the mic up with the call, cross-fades), `Recap.swift` (the Gemini prompts and detailed recap format, the recap's Markdown and topics), `Transcript.swift` (lines, speakers and turns, parts' times), `CallRules.swift` (which apps are calls, mute button wording).
+  `MicLine.swift` (lining the mic up with the call, cross-fades), `Recap.swift` (the transcription and recap prompts, detailed recap format, the recap's Markdown and topics), `Transcript.swift` (lines, speakers and turns, parts' times), `CallRules.swift` (which apps are calls, mute button wording).
 - `Sources/Tape`: the app. `CallCapture` (tap + aggregate device, microphones), `TapeWriter` (mix and
   encode), `Recordings` (folder, repackaging, crash recovery), `Library` (recordings and their files),
-  `Processing/` (Gemini, native WAV preparation, the Keychain, the pipeline; the legacy Claude client is unused), `CallWatcher`, `MuteWatcher`, `Recorder`,
+  `Processing/` (Gemini, Claude, native WAV preparation, the Keychain and the pipeline), `CallWatcher`, `MuteWatcher`, `Recorder`,
   `Toast` (the notch island's cards), `NotchBar` (the notch's quick actions and live strip), `UI/` (window,
   library and reader, Settings, the introduction, theme),
   `TapeApp` (app and menu bar).
@@ -137,8 +136,8 @@ island's states as PNGs, and quits; `--env TAPE_TEST_VERSION=0.1.0
 
 ## Verify the transcription and recap pipeline
 
-`python3 scripts/e2e/khmer_pipeline.py` runs the native debug app against a local Gemini fixture service,
+`python3 scripts/e2e/khmer_pipeline.py` runs the native debug app against a local Gemini and Claude fixture service,
 using synthetic stereo audio and dummy credentials. It covers success, missing/refused keys, invalid audio,
 empty/truncated responses, long recordings and retrying a failed recap without re-transcription. It writes
 repeatable receipts, uploaded WAVs, transcripts, recaps and native reader snapshots to `build/e2e/`.
-This verifies integration, not live Gemini accuracy. See [verification details](docs/khmer-pipeline-verification.md).
+This verifies integration, not live model accuracy. See [verification details](docs/khmer-pipeline-verification.md).

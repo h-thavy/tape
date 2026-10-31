@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run Tape's native pipeline against a local Gemini HTTP fixture; never uses real keys."""
+"""Run Tape's native pipeline against local Gemini and Claude HTTP fixtures; never uses real keys."""
 import argparse
 import hashlib
 import json
@@ -83,25 +83,53 @@ def run_case(binary, folder, scenario, seconds=4, audio_path=None):
                         assert "<previous>" in payload["input"][0]["text"]
                     text = "" if scenario == "empty-transcript" else TRANSCRIPT
                     self.reply({"status": "completed", "steps": [{"type": "model_output", "content": [{"type": "text", "text": text}]}]})
-                elif self.path == "/v1beta/models/gemini-3.8-flash:generateContent":
+                elif self.path == "/v1/messages":
                     counts["summaries"] += 1
                     payload = json.loads(body)
-                    parts = payload["contents"][0]["parts"]
-                    assert all("text" in p for p in parts), "Recap must receive text only"
-                    assert all(line in parts[0]["text"] for line in TRANSCRIPT.splitlines())
+                    assert self.headers["x-api-key"] == "fixture-claude-key"
+                    assert self.headers["anthropic-version"] == "2026-10-21"
+                    assert self.headers["anthropic-beta"] == "server-side-fallback-2026-07-01"
+                    assert payload["model"] == "claude-opus-5-5"
+                    assert payload["stream"] is True and payload["thinking"]["type"] == "adaptive"
+                    assert payload["output_config"]["effort"] == "high"
+                    assert payload["fallbacks"] == "default"
+                    text_input = payload["messages"][0]["content"]
+                    assert isinstance(text_input, str), "Claude must receive text only"
+                    assert all(line in text_input for line in TRANSCRIPT.splitlines())
                     if scenario == "long-audio":
-                        assert "[10:00]" in parts[0]["text"] and "[10:02]" in parts[0]["text"]
-                    system = payload["systemInstruction"]["parts"][0]["text"]
+                        assert "[10:00]" in text_input and "[10:02]" in text_input
+                    system = payload["system"]
                     assert "Write the recap in English" in system
-                    assert "Next steps" in system and "never by a personal name" in system
-                    assert payload["generationConfig"]["thinkingConfig"]["thinkingLevel"] == "high"
+                    assert "Next steps" in system and "never guess a name" in system
+                    if scenario == "refused-claude-key":
+                        return self.reply({"error": {"message": "Invalid API key"}}, 401)
                     if scenario == "recap-failure-retry" and counts["summaries"] == 1:
                         return self.reply({"error": {"message": "Quota reached"}}, 429)
                     text = "" if scenario == "empty-summary" else summary + "\n\n[topic times] 1=00:00"
-                    finish = "MAX_TOKENS" if scenario == "truncated-summary" else "STOP"
-                    self.reply({"candidates": [{"finishReason": finish, "content": {"parts": [
-                        {"text": "Internal reasoning must not appear in the recap.", "thought": True}, {"text": text}
-                    ]}}]})
+                    stream = [{"type": "message_start", "message": {"model": "claude-opus-5-5"}},
+                              {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking"}},
+                              {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "Private reasoning"}},
+                              {"type": "content_block_stop", "index": 0}]
+                    if scenario == "fallback-summary":
+                        stream += [
+                            {"type": "content_block_start", "index": 1, "content_block": {"type": "text"}},
+                            {"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": "Declined partial reply"}},
+                            {"type": "content_block_stop", "index": 1},
+                            {"type": "content_block_start", "index": 2, "content_block": {"type": "fallback", "model": "fixture-fallback"}},
+                            {"type": "content_block_stop", "index": 2},
+                        ]
+                    stream += [{"type": "content_block_start", "index": 3, "content_block": {"type": "text"}},
+                               {"type": "content_block_delta", "index": 3, "delta": {"type": "text_delta", "text": text}},
+                               {"type": "content_block_stop", "index": 3},
+                               {"type": "message_delta", "delta": {"stop_reason": "max_tokens" if scenario == "truncated-summary" else "refusal" if scenario == "refused-summary" else "end_turn"}}]
+                    if scenario != "interrupted-summary":
+                        stream.append({"type": "message_stop"})
+                    data = "".join("event: " + event["type"] + "\ndata: " + json.dumps(event, ensure_ascii=False) + "\n\n" for event in stream).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
                 else:
                     raise AssertionError(f"Unexpected endpoint {self.path}")
             except Exception as error:
@@ -133,7 +161,7 @@ def run_case(binary, folder, scenario, seconds=4, audio_path=None):
     with source.open("rb") as stream:
         assert hashlib.file_digest(stream, "sha256").hexdigest() == source_hash, "Source audio changed"
     assert not any("fixture_error" in event for event in events), events
-    if scenario in ("success", "recap-failure-retry", "long-audio"):
+    if scenario in ("success", "recap-failure-retry", "long-audio", "fallback-summary"):
         assert counts["transcriptions"] == (expected_parts if scenario == "long-audio" else 1), counts
         assert counts["summaries"] == (2 if scenario == "recap-failure-retry" else 1), counts
         # Tape renames the recording and its source reference from the recap title.
@@ -144,7 +172,7 @@ def run_case(binary, folder, scenario, seconds=4, audio_path=None):
         assert (folder / "transcript.png").stat().st_size > 10000
     elif scenario == "empty-transcript":
         assert counts["summaries"] == 0
-    elif scenario in ("invalid-audio", "empty-audio", "missing-key"):
+    elif scenario in ("invalid-audio", "empty-audio", "missing-key", "missing-gemini-key", "missing-claude-key"):
         assert counts["uploads"] == 0 and counts["summaries"] == 0
     assert counts["deletes"] == counts["uploads"], counts
     if scenario == "long-audio":
@@ -161,7 +189,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, default=ROOT / "build/e2e")
     parser.add_argument("--skip-build", action="store_true")
-    parser.add_argument("--audio", type=Path, help="Optional local recording; still uses fixture Gemini replies")
+    parser.add_argument("--audio", type=Path, help="Optional local recording; still uses fixture provider replies")
     parser.add_argument("--audio-seconds", type=float, help="Independently measured decoded duration for --audio")
     args = parser.parse_args()
     if args.audio and (not args.audio.is_file() or not args.audio_seconds or args.audio_seconds <= 720):
@@ -170,7 +198,8 @@ def main():
         subprocess.run(["swift", "build", "--product", "Tape"], cwd=ROOT, check=True)
     binpath = subprocess.check_output(["swift", "build", "--show-bin-path"], cwd=ROOT, text=True).strip()
     cases = ["success", "recap-failure-retry", "empty-transcript", "empty-summary", "truncated-summary",
-             "invalid-audio", "empty-audio", "refused-key", "missing-key", "long-audio"]
+             "invalid-audio", "empty-audio", "refused-key", "missing-key", "missing-gemini-key", "missing-claude-key",
+             "refused-claude-key", "interrupted-summary", "refused-summary", "fallback-summary", "long-audio"]
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=True)
     if args.audio:
@@ -179,7 +208,7 @@ def main():
     else:
         receipts = [run_case(Path(binpath) / "Tape", args.output / case, case,
                         721 if case == "long-audio" else 0 if case == "empty-audio" else 4) for case in cases]
-    (args.output / "receipt.json").write_text(json.dumps({"passed": True, "mode": "local Gemini fixtures, supplied audio" if args.audio else "local Gemini fixtures, synthetic audio", "cases": receipts}, indent=2))
+    (args.output / "receipt.json").write_text(json.dumps({"passed": True, "mode": "local Gemini and Claude fixtures, supplied audio" if args.audio else "local Gemini and Claude fixtures, synthetic audio", "cases": receipts}, indent=2))
 
 
 if __name__ == "__main__":

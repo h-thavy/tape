@@ -278,7 +278,7 @@ private struct TitleBar: View {
             } else if !settings.hasKeys {
                 Image(systemName: "key").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.working)
                 Button { main.page = .settings } label: {
-                    Text("Add Gemini key for recaps").font(Theme.sans(12.5, .medium)).foregroundStyle(Theme.ink2)
+                    Text("Add API keys for recaps").font(Theme.sans(12.5, .medium)).foregroundStyle(Theme.ink2)
                 }
                 .buttonStyle(.plainPointer)
             } else if let call = calls.current {

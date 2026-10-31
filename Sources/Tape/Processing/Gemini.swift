@@ -8,7 +8,6 @@ import os
 /// and the uploaded file is deleted afterwards.
 struct Gemini {
     static let model = "gemini-3.8-flash"
-    static let summaryModel = "gemini-3.8-flash"
     private static let base = URL(string: "https://generativelanguage.googleapis.com")!
 
     let key: String
@@ -93,36 +92,6 @@ struct Gemini {
     private func removeUpload(_ name: String) async {
         do { try await delete(name) }
         catch { log.error("Couldn't delete uploaded audio from Gemini: \(error.localizedDescription, privacy: .public)") }
-    }
-
-    /// A second, text-only Gemini request writes the detailed English meeting recap.
-    func recap(system: String, request recapRequest: String) async throws -> String {
-        guard !recapRequest.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw Failure(message: "The recap request is empty. Transcribe a recording first.")
-        }
-        return try await withRetry {
-            var call = request("v1beta/models/\(Self.summaryModel):generateContent", method: "POST", timeout: 180)
-            call.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            call.httpBody = try JSONSerialization.data(withJSONObject: [
-                "systemInstruction": ["parts": [["text": system]]],
-                "contents": [["parts": [["text": recapRequest]]]],
-                "generationConfig": ["temperature": 0, "maxOutputTokens": 16384, "thinkingConfig": ["thinkingLevel": "high"]],
-            ])
-            let (data, _) = try await send(call)
-            let json = try parse(data)
-            guard let candidate = (json["candidates"] as? [[String: Any]])?.first,
-                  candidate["finishReason"] as? String == "STOP",
-                  let content = candidate["content"] as? [String: Any],
-                  let parts = content["parts"] as? [[String: Any]] else {
-                throw Failure(message: "Gemini didn't finish the recap. Your transcript is saved; try again.")
-            }
-            let text = parts.filter { $0["thought"] as? Bool != true }
-                .compactMap { $0["text"] as? String }.joined().trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !text.isEmpty else {
-                throw Failure(message: "Gemini returned an empty recap. Your transcript is saved; try again.")
-            }
-            return text
-        }
     }
 
     /// Tries again (twice, after 5 and 20 seconds) when Gemini fails on its side or the network drops; not

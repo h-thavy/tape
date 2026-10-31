@@ -5,7 +5,7 @@ import SwiftUI
 
 /// The introduction on first launch: what Tape does, each idea with a small animation (the notch asking to
 /// record, your mic following the mute button, the transcript turning into a recap), then the permissions and
-/// the Gemini key. It can be shown again from Settings.
+/// the API keys. It can be shown again from Settings.
 @MainActor
 final class Onboarding: ObservableObject {
     static let shared = Onboarding()
@@ -122,7 +122,7 @@ private struct OnboardingView: View {
 
     private var title: String {
         ["Tape records your calls", "It asks when a call starts", "Your mic follows your mute button",
-         "A recap when you want one", "Three permissions", "Your Gemini key", "You're set"][step]
+         "A recap when you want one", "Three permissions", "Your API keys", "You're set"][step]
     }
 
     private var text: String {
@@ -130,9 +130,9 @@ private struct OnboardingView: View {
             "Any call, in any app. The recording is saved the moment the call ends, sounding exactly like the call, and you can turn it into a transcript and a recap. No account: your recordings stay on this Mac.",
             "Zoom, Google Meet, Teams, Slack, WhatsApp… when an app starts a call, Tape asks in the notch. One click records, and it stops by itself when the call ends.",
             "While you're muted in the meeting, your mic is left out of the recording entirely. Unmute to speak and it's recorded again. The others are always recorded.",
-            "Import audio or record a call, then press Transcribe + summarize. Gemini writes the Khmer transcript, keeping English terms as spoken, then a second Gemini call writes a detailed English recap with topics, decisions and next steps. Both appear in Tape. Only the calls you choose use your credits.",
+            "Import audio or record a call, then press Transcribe + summarize. Gemini writes the Khmer transcript, keeping English terms as spoken, then Claude writes a detailed English recap with topics, decisions and next steps. Both appear in Tape. Only the calls you choose use your credits.",
             "Tape needs your microphone (your voice), system audio recording (the other people), and Accessibility (to see the call's mute button). Nothing leaves your Mac except to make a recap.",
-            "Transcripts and recaps use one Gemini API key, kept in your Mac's Keychain. You can also add it later in Settings.",
+            "Add a Gemini key for transcription and an Anthropic key for recaps. Both stay in your Mac's Keychain. You can also add them later in Settings.",
             "Tape waits in the notch and the menu bar. Hover over the notch any time to record, import a recording or open Tape.",
         ][step]
     }
@@ -149,6 +149,7 @@ private struct OnboardingView: View {
         } else if step == 5 {
             VStack(spacing: 8) {
                 KeyField(service: .gemini)
+                KeyField(service: .anthropic)
             }
             .padding(.top, 8)
         }

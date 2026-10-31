@@ -2,7 +2,7 @@ import AppKit
 import TapeCore
 import os
 
-/// Turns each recording into a Khmer/English transcript and detailed English recap using two Gemini calls.
+/// Turns each recording into a Khmer/English transcript and detailed English recap using Gemini and Claude.
 /// The transcript is kept, so a failed recap is retried without transcribing again.
 @MainActor
 final class Processor {
@@ -10,13 +10,15 @@ final class Processor {
 
     private var running = false
     private let suppliedGemini: Gemini?
+    private let suppliedClaude: Claude?
     private let notify: Bool
     private let log = Logger(subsystem: "io.github.h-thavy.tape", category: "processor")
 
     private var library: Library { Library.shared }
 
-    init(gemini: Gemini? = nil, notify: Bool = true) {
+    init(gemini: Gemini? = nil, claude: Claude? = nil, notify: Bool = true) {
         suppliedGemini = gemini
+        suppliedClaude = claude
         self.notify = notify
     }
 
@@ -45,24 +47,25 @@ final class Processor {
     private func runNext() {
         guard !running, let next = library.items.reversed().first(where: { $0.status == .queued }) else { return }
         let gemini = suppliedGemini ?? APIKeys.get(.gemini).map { Gemini(key: $0) }
-        guard let gemini else {
+        let claude = suppliedClaude ?? APIKeys.get(.anthropic).map { Claude(key: $0) }
+        guard let gemini, let claude else {
             for item in library.items where item.status == .queued {
                 library.update(item.id) {
                     $0.status = .waitingForKeys
-                    $0.detail = "Add your Gemini API key in Settings to transcribe and summarize."
+                    $0.detail = "Add your Gemini and Anthropic API keys in Settings to transcribe and summarize."
                 }
             }
             return
         }
         running = true
         Task {
-            await run(next, gemini: gemini)
+            await run(next, gemini: gemini, claude: claude)
             running = false
             runNext()
         }
     }
 
-    private func run(_ item: RecordingItem, gemini: Gemini) async {
+    private func run(_ item: RecordingItem, gemini: Gemini, claude: Claude) async {
         let id = item.id
         let started = Date()
         do {
@@ -83,7 +86,7 @@ final class Processor {
                 date: item.created.formatted(.dateTime.day().month(.wide).year().hour().minute()),
                 seconds: item.duration, app: item.app,
                 transcriptFile: library.transcriptURL(item).lastPathComponent, transcript: transcript ?? "")
-            let (reply, times) = RecapFormat.splitTopicTimes(try await gemini.recap(system: RecapPrompts.recapSystem, request: request))
+            let (reply, times) = RecapFormat.splitTopicTimes(try await claude.recap(system: RecapPrompts.recapSystem, request: request))
             let recap = RecapFormat.flattened(reply)
             try (recap + "\n").write(to: library.recapURL(item), atomically: true, encoding: .utf8)
             library.update(id) {

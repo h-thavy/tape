@@ -223,7 +223,7 @@ struct RecapStatus: View {
         case .transcribing: "Transcribing"
         case .writing: "Writing recap"
         case .failed: "Recap failed"
-        case .waitingForKeys: "Needs Gemini key"
+        case .waitingForKeys: "Needs API keys"
         case .notProcessed: "No recap"
         }
     }
@@ -370,7 +370,7 @@ struct ReaderPane: View {
                 Text("When a call starts, Tape asks whether to record it. When it ends, select Transcribe + summarize for the full transcript and a detailed English meeting recap.")
                     .font(Theme.sans(13.5)).foregroundStyle(Theme.ink2).multilineTextAlignment(.center).frame(maxWidth: 420)
                 if !settings.hasKeys {
-                    Button("Add Gemini key") { main.page = .settings }.buttonStyle(.pill)
+                    Button("Add API keys") { main.page = .settings }.buttonStyle(.pill)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -649,12 +649,12 @@ private struct StatusBanner: View {
             banner(icon: AnyView(Spinner(size: 13, color: Theme.working)), text: item.detail ?? "Waiting…",
                    detail: item.status == .transcribing ? "Gemini is listening to the call. Long meetings can take several minutes per part." : nil)
         case .waitingForKeys:
-            banner(icon: AnyView(Image(systemName: "key").foregroundStyle(Theme.ink2)), text: "Add your Gemini API key to get the recap.", detail: nil) {
+            banner(icon: AnyView(Image(systemName: "key").foregroundStyle(Theme.ink2)), text: "Add your Gemini and Anthropic API keys to get the recap.", detail: nil) {
                 Button("Open Settings") { MainWindow.shared.page = .settings }.buttonStyle(.pillQuiet).controlSize(.small)
             }
         case .notProcessed:
             banner(icon: AnyView(Image(systemName: "sparkles").foregroundStyle(Theme.ink2)), text: "No recap yet",
-                   detail: "Gemini writes the Khmer/English transcript and a detailed English recap with decisions, open questions and next steps, with your API key (\(Self.estimate(item.duration))).") {
+                   detail: "Gemini writes the Khmer/English transcript; Claude writes a detailed English recap with decisions, open questions and next steps, using your API keys (\(Self.estimate(item.duration))).") {
                 Button { Processor.shared.process(item.id) } label: { Label("Transcribe + summarize", systemImage: "sparkles") }
                     .buttonStyle(.pill).controlSize(.small)
             }
@@ -667,11 +667,11 @@ private struct StatusBanner: View {
     }
 
     /// Roughly what a recap of this length uses: audio is about 32 tokens a second for Gemini; the transcript
-    /// Gemini reads is about 3 tokens a second of talk.
+    /// Claude reads is about 3 tokens a second of talk.
     static func estimate(_ seconds: Double) -> String {
         let minutes = max(1, Int((seconds / 60).rounded()))
         let audio = Int(seconds * 32 / 1000), text = Int(seconds * 3 / 1000)
-        return "\(minutes) min of audio: about \(max(1, audio))k audio tokens and \(max(1, text))k transcript tokens for Gemini"
+        return "\(minutes) min of audio: about \(max(1, audio))k audio tokens and \(max(1, text))k transcript tokens for Claude"
     }
 
     private func banner(icon: AnyView, text: String, detail: String?,

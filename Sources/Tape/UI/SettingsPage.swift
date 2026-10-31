@@ -65,14 +65,15 @@ struct SettingsPage: View {
 
             section("Recaps") {
                 SettingsCard {
-                    KeyRow(service: .gemini, detail: "Transcribes Khmer speech, keeping English terms as spoken (Gemini 3.8 Flash), then writes a detailed English meeting recap with decisions and next steps (Gemini 3.8 Flash).")
+                    KeyRow(service: .gemini, detail: "Transcribes Khmer speech, keeping English terms as spoken (Gemini 3.8 Flash).")
+                    KeyRow(service: .anthropic, detail: "Writes a detailed English meeting recap with topics, decisions and next steps (Claude Opus 5.5).")
                     SettingsRow(title: "Make recaps automatically",
                                 detail: "Off: a recording waits until you press Transcribe + summarize, so credits are only used for the calls you want recapped.",
                                 last: true) {
                         Toggle("Make recaps automatically", isOn: $settings.autoRecap).toggleStyle(.switch).labelsHidden()
                     }
                 }
-                Text("Your Gemini key stays in your Mac's Keychain. Audio is sent to Google for transcription, then a second Gemini call summarizes the transcript. No Anthropic key is needed.")
+                Text("Your keys stay in your Mac's Keychain. Audio is sent to Google for transcription, then the transcript is sent to Anthropic for the recap.")
                     .font(Theme.sans(12.5)).foregroundStyle(Theme.ink3)
                     .fixedSize(horizontal: false, vertical: true)
             }

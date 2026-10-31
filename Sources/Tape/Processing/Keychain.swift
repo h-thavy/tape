@@ -64,5 +64,5 @@ enum APIKeys {
         SecItemAdd(item as CFDictionary, nil)
     }
 
-    static var complete: Bool { APIKeys.get(.gemini) != nil }
+    static var complete: Bool { APIKeys.get(.gemini) != nil && APIKeys.get(.anthropic) != nil }
 }

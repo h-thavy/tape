@@ -7,9 +7,17 @@ import os
 /// (`fallbacks: "default"`).
 struct Claude {
     static let model = "claude-opus-5-5"
-    private static let endpoint = URL(string: "https://api.anthropic.com/v1/messages")!
+    static let endpoint = URL(string: "https://api.anthropic.com/v1/messages")!
 
     let key: String
+    private let endpoint: URL
+    private let session: URLSession
+
+    init(key: String, endpoint: URL = Self.endpoint, session: URLSession = .shared) {
+        self.key = key
+        self.endpoint = endpoint
+        self.session = session
+    }
     private let log = Logger(subsystem: "io.github.h-thavy.tape", category: "claude")
 
     struct Failure: LocalizedError {
@@ -28,7 +36,7 @@ struct Claude {
             "system": system,
             "messages": [["role": "user", "content": text]],
         ]
-        var request = URLRequest(url: Self.endpoint, timeoutInterval: 900)
+        var request = URLRequest(url: endpoint, timeoutInterval: 900)
         request.httpMethod = "POST"
         request.setValue(key, forHTTPHeaderField: "x-api-key")
         request.setValue("2026-10-21", forHTTPHeaderField: "anthropic-version")
@@ -36,7 +44,7 @@ struct Claude {
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+        let (bytes, response) = try await session.bytes(for: request)
         guard let http = response as? HTTPURLResponse else { throw Failure(message: "No reply from Claude.") }
         guard http.statusCode == 200 else {
             var data = Data()
@@ -49,6 +57,7 @@ struct Claude {
         var text = ""
         var textBlocks = Set<Int>()
         var stopReason: String?
+        var finished = false
         var model = Self.model
         for try await line in bytes.lines {
             guard line.hasPrefix("data: "), let data = line.dropFirst(6).data(using: .utf8),
@@ -63,6 +72,8 @@ struct Claude {
                 if block?["type"] as? String == "text" { textBlocks.insert(index) }
                 if block?["type"] as? String == "fallback" {
                     text = ""
+                    textBlocks.removeAll()
+                    stopReason = nil
                     if let to = block?["model"] as? String { model = to }
                 }
             case "content_block_delta":
@@ -71,6 +82,8 @@ struct Claude {
                    delta?["type"] as? String == "text_delta", let piece = delta?["text"] as? String {
                     text += piece
                 }
+            case "message_stop":
+                finished = true
             case "message_delta":
                 if let reason = (event["delta"] as? [String: Any])?["stop_reason"] as? String { stopReason = reason }
             case "error":
@@ -84,9 +97,12 @@ struct Claude {
         switch stopReason {
         case "refusal":
             throw Failure(message: "Claude declined to write this recap.")
-        case "max_tokens" where text.isEmpty:
-            throw Failure(message: "Claude ran out of room before writing the recap.")
+        case "max_tokens":
+            throw Failure(message: "Claude cut the recap short. Your transcript is saved; try again.")
         default:
+            guard finished, stopReason == "end_turn" else {
+                throw Failure(message: "Claude did not finish the recap. Your transcript is saved; try again.")
+            }
             let recap = text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !recap.isEmpty else { throw Failure(message: "Claude's reply was empty.") }
             return recap
