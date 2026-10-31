@@ -1,7 +1,7 @@
 # Tape
 
 Records your calls on a Mac and turns each one into a meeting recap: Gemini writes the transcript
-(Khmer and English as spoken), Claude writes the recap. No account, no sign-in: you add your own API keys.
+(Khmer and English terms as spoken), then Claude writes a detailed English meeting recap. No account, no sign-in: add your own Gemini and Anthropic API keys.
 
 ## Install
 
@@ -11,8 +11,7 @@ Paste this into Terminal:
 curl -fsSL https://raw.githubusercontent.com/h-thavy/tape/main/scripts/install.sh | bash
 ```
 
-Then open **Settings** in Tape and add a [Gemini API key](https://aistudio.google.com/apikey) and an
-[Anthropic API key](https://console.anthropic.com/settings/keys). Needs macOS 14.2 or later on Apple Silicon.
+Then open **Settings** in Tape and add a [Gemini API key](https://aistudio.google.com/apikey) for transcription and an [Anthropic API key](https://platform.claude.com/) for recaps. Needs macOS 14.2 or later on Apple Silicon.
 
 <details>
 <summary><b>Uninstall</b></summary>
@@ -38,17 +37,23 @@ curl -fsSL https://raw.githubusercontent.com/h-thavy/tape/main/scripts/install.s
   recordings: people you share your whole screen with don't see it.
 - **Stops when the call ends.** The recording is encoded while you talk, so it's saved the moment the call
   ends, trimmed to where the call left the microphone.
-- **Writes the recap when you ask.** Press *Make recap* on a recording (or on the "Recording saved" card, or
-  for several at once) and it goes to Gemini, converted first to 16 kHz mono (what Gemini works from; about a
-  third of the upload) (`gemini-3.8-flash`, the best at Khmer mixed with
-  English) for a timestamped transcript, then to Claude (Claude Opus 5.5) for the recap: what the meeting was,
-  one section per topic with the decisions, details and open questions, and the next steps. Recordings over
-  12 minutes go to Gemini in 10-minute parts (it fails on long audio in one go), with the speaker labels
-  carried from one part to the next; a failure on Gemini's side is retried. Both are saved next to the
-  recording and shown in the app. The recap opens with **សង្ខេប**, 2 to 4 key points in Khmer, then the
-  detailed recap in English; in the app, a map of the meeting shows who spoke when and where each topic
-  starts (click to play from there). Recaps use your keys' credits, so none is made until you ask, unless
-  you turn on *Make recaps automatically* in Settings:
+- **Transcribes and summarizes when you ask.** Import audio or record a call, then press
+  *Transcribe + summarize* on a recording (or on the "Recording saved" card, or for several at once).
+  Tape prepares a temporary **16 kHz mono PCM WAV** using native macOS audio decoding, preserving the
+  original. Gemini (`gemini-3.8-flash`) writes the timestamped Khmer transcript, keeping English terms as
+  spoken. A text-only Claude call (`claude-opus-5-5`) writes a detailed **English meeting recap**:
+  context, topic sections, decisions, open questions and next steps by owner. A short Khmer summary with
+  2–4 key points appears above the English topics. Topic timestamps link back
+  to the recording. Both calls use high reasoning; processing a long meeting can take several minutes.
+  Both appear in the recording's **Transcript** and **Recap** tabs and are saved next to the audio.
+  Tape normalizes before splitting, avoiding inaccurate source-format timelines. Audio is transcribed in
+  pieces of up to five minutes. After the first piece establishes speaker context, up to three pieces run
+  concurrently and are merged chronologically. An incomplete, empty or repeatedly failed piece is retried
+  as two smaller pieces, with bounded recovery. Completed pieces and the exact working WAV
+  are saved locally so retrying after a failure or restart resumes progress. Changed audio or prompts
+  invalidate that checkpoint. If the recap fails, retrying reuses the saved full transcript. Processing starts
+  only when you ask,
+  unless you turn on *Make recaps automatically* in Settings. No Flask, Python server or FFmpeg is required:
 
   ```
   ~/Documents/Tape/2026-10-30 14.05 Google Meet in Opera GX.m4a
@@ -58,15 +63,15 @@ curl -fsSL https://raw.githubusercontent.com/h-thavy/tape/main/scripts/install.s
 
 - **Recaps recordings you already have.** Use **Import** (or drop files on the window) for recordings from
   before Tape or from anywhere else: audio (m4a, mp3, wav, aac, flac, ogg…) or video (the sound is taken out).
-  Recordings already in `~/Documents/Tape` show up by themselves, with a "Make recap" button.
+  Recordings already in `~/Documents/Tape` show up by themselves, with a "Transcribe + summarize" button.
 - **Follows the call's mute button.** Muted in the meeting: your mic is left out entirely. Unmuted: it's
   recorded. The introduction doesn't go on until all three permissions are allowed; after that, Tape asks for
   them at every launch while one is missing, and again whenever one is
   turned off; while it can't see the mute button, the notch and the window say so. (Needs Accessibility. A browser shows only its visible tab, so while a browser call's tab is in
   the background Tape keeps the last state it saw.)
-- **Names itself.** A recording takes the meeting's title when its window shows one ("Meet – Weekly sync",
-  "Pricing review | Microsoft Teams"), else the topic from its recap. Click the title to rename it. Its files
-  take the name (`<name>.m4a`, `.transcript.txt`, `.recap.md`), and Claude sees it.
+- **Keeps the meeting name.** A recording takes the meeting's title when its window shows one ("Meet – Weekly sync",
+  "Pricing review | Microsoft Teams"), otherwise the topic from the recap. Imports start with their file names. Click the title to rename it. Its files
+  take the name (`<name>.m4a`, `.transcript.txt`, `.recap.md`), and it appears in Tape.
 - **Library.** ⌘-click or ⇧-click to pick several recordings, then move them to the Trash (Finder's Put Back
   restores them). *Copy recording* puts the audio file on the clipboard, to paste into a chat, an email or
   Finder; recordings can also be dragged out of the library.
@@ -97,16 +102,20 @@ meeting map is adjustable with VoiceOver (15 s steps), and animations stop under
 
 ## Privacy
 
-Recordings, transcripts and recaps stay in `~/Documents/Tape`. A recording is sent to Google (Gemini) and its
-transcript to Anthropic (Claude) only to make the recap, with your keys; the uploaded audio is deleted from
-Google right after. The keys are kept in the macOS Keychain.
+Recordings, transcripts and recaps are saved in `~/Documents/Tape`. To process one, a temporary 16 kHz mono
+WAV is sent to Google (Gemini) for transcription, then its transcript is sent to Anthropic (Claude) for the recap, using
+your respective keys. Tape attempts to delete the uploaded audio after transcription, including on failure, and removes
+the local working WAV once the complete transcript is saved. While transcription is unfinished, its working
+WAV and completed pieces are retained under `~/Library/Application Support/Tape/Transcription` for retry.
+Your API keys are kept in the macOS Keychain. Existing saved recaps remain readable.
 
 ## Build from source
 
 ```sh
 scripts/build-app.sh        # → build/Tape.app, signed with your Apple Development identity
 open build/Tape.app
-swift test                  # the mixer, mic alignment, prompts, transcripts and recaps
+swift test                  # existing mixer, mic alignment, prompts, transcripts and recaps checks
+python3 scripts/e2e/khmer_pipeline.py  # native pipeline E2E, local Gemini and Claude fixtures and saved artifacts
 scripts/release.sh          # dist/Tape.zip for a GitHub release (--publish to upload it)
 swift scripts/make-icon.swift   # the cassette icon (same geometry as TapeMark, which also draws the menu bar icon)
 ```
@@ -123,12 +132,21 @@ island's states as PNGs, and quits; `--env TAPE_TEST_VERSION=0.1.0
 ## Layout
 
 - `Sources/TapeCore`: pure logic, unit tested. `TapeMix.swift` (mixer, echo handling, mute timeline),
-  `MicLine.swift` (lining the mic up with the call, cross-fades), `Recap.swift` (the Gemini and Claude
-  prompts, the recap's Markdown and topics), `Transcript.swift` (lines, speakers and turns, parts' times), `CallRules.swift` (which apps are calls, mute button wording).
+  `MicLine.swift` (lining the mic up with the call, cross-fades), `Recap.swift` (the transcription and recap prompts, detailed recap format, the recap's Markdown and topics), `Transcript.swift` (lines, speakers and turns, parts' times), `CallRules.swift` (which apps are calls, mute button wording).
 - `Sources/Tape`: the app. `CallCapture` (tap + aggregate device, microphones), `TapeWriter` (mix and
   encode), `Recordings` (folder, repackaging, crash recovery), `Library` (recordings and their files),
-  `Processing/` (Gemini, Claude, the Keychain, the pipeline), `CallWatcher`, `MuteWatcher`, `Recorder`,
+  `Processing/` (Gemini, Claude, native WAV preparation, the Keychain and the pipeline), `CallWatcher`, `MuteWatcher`, `Recorder`,
   `Toast` (the notch island's cards), `NotchBar` (the notch's quick actions and live strip), `UI/` (window,
   library and reader, Settings, the introduction, theme),
   `TapeApp` (app and menu bar).
 - `scripts/`: build, release, install and icon scripts.
+
+## Verify the transcription and recap pipeline
+
+`python3 scripts/e2e/khmer_pipeline.py` runs the native debug app against a local Gemini and Claude fixture service,
+using synthetic stereo audio and dummy credentials. It covers success, missing/refused keys, invalid audio,
+empty/truncated responses, recursive chunk recovery, bounded processing failures, restart/resume,
+out-of-order parallel replies and checkpoints, changed/corrupt caches, long recordings
+and retrying a failed recap without re-transcription. It compares completed audio pieces sample-for-sample
+with their normalized source and writes repeatable receipts, uploaded WAVs, transcripts, recaps and native reader snapshots to `build/e2e/`.
+This verifies integration, not live model accuracy. See [verification details](docs/khmer-pipeline-verification.md).

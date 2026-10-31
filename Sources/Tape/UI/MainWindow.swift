@@ -88,6 +88,13 @@ final class MainWindow: ObservableObject {
         if !rename { DispatchQueue.main.async { window.makeFirstResponder(nil) } }
     }
 
+    #if DEBUG
+    /// The E2E runner captures the actual reader without touching normal startup or recording hardware.
+    func pipelineSnapshot(to url: URL) {
+        if let view = window?.contentView { Snapshot.write(view, to: url) }
+    }
+    #endif
+
     /// Debug hook: TAPE_SNAPSHOT=<folder> saves the window's pages there as PNGs (the newest recording's recap
     /// and transcript, settings), the onboarding's steps and the notch island's states, for checking the
     /// layout without screen recording.

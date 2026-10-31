@@ -142,7 +142,7 @@ final class Toast {
                                     primary: .init(title: "Record", symbol: "record.circle") {}, secondary: .init(title: "Not now") {},
                                     timeout: nil, attention: true)),
             ("island-saved", Card(id: "saved", symbol: "checkmark.circle", title: "Recording saved", detail: "42:10",
-                                  message: "Weekly sync with Ploy HR", primary: .init(title: "Make recap", symbol: "sparkles") {},
+                                  message: "Weekly sync with Ploy HR", primary: .init(title: "Transcribe + summarize", symbol: "sparkles") {},
                                   secondary: .init(title: "Open") {})),
             ("island-recap", Card(id: "recap", symbol: "doc.text", title: "Recap ready", message: "AI-Powered CV Automation · 6 topics",
                                   primary: .init(title: "Open") {})),

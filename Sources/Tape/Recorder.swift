@@ -190,7 +190,7 @@ final class Recorder: ObservableObject {
                     id: "saved", symbol: "checkmark.circle", title: "Recording saved", detail: Counter.text(seconds),
                     message: [title, auto ? (APIKeys.complete ? "Recap starts now" : "Add API keys for a recap") : nil]
                         .compactMap { $0 }.joined(separator: " · ").nilIfEmpty,
-                    primary: auto ? open : .init(title: "Make recap", symbol: "sparkles") { Processor.shared.process(id) },
+                    primary: auto ? open : .init(title: "Transcribe + summarize", symbol: "sparkles") { Processor.shared.process(id) },
                     secondary: auto ? nil : open,
                     timeout: auto ? 6 : 12))
             }

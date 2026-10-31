@@ -2,20 +2,30 @@ import AppKit
 import TapeCore
 import os
 
-/// Turns each finished recording into a transcript (Gemini) and a recap (Claude), one recording at a time.
+/// Turns each recording into a Khmer/English transcript and detailed English recap using Gemini and Claude.
 /// The transcript is kept, so a failed recap is retried without transcribing again.
 @MainActor
 final class Processor {
     static let shared = Processor()
 
     private var running = false
+    private let suppliedGemini: Gemini?
+    private let suppliedClaude: Claude?
+    private let notify: Bool
     private let log = Logger(subsystem: "io.github.h-thavy.tape", category: "processor")
 
     private var library: Library { Library.shared }
 
+    init(gemini: Gemini? = nil, claude: Claude? = nil, notify: Bool = true) {
+        suppliedGemini = gemini
+        suppliedClaude = claude
+        self.notify = notify
+    }
+
     /// Queues a recording (or makes the recap again).
     func process(_ id: String, again: Bool = false) {
         guard let item = library.item(id) else { return }
+        guard !item.isWorking else { return }
         if again {
             try? FileManager.default.removeItem(at: library.recapURL(item))
         }
@@ -36,18 +46,20 @@ final class Processor {
 
     private func runNext() {
         guard !running, let next = library.items.reversed().first(where: { $0.status == .queued }) else { return }
-        guard let geminiKey = APIKeys.get(.gemini), let anthropicKey = APIKeys.get(.anthropic) else {
+        let gemini = suppliedGemini ?? APIKeys.get(.gemini).map { Gemini(key: $0) }
+        let claude = suppliedClaude ?? APIKeys.get(.anthropic).map { Claude(key: $0) }
+        guard let gemini, let claude else {
             for item in library.items where item.status == .queued {
                 library.update(item.id) {
                     $0.status = .waitingForKeys
-                    $0.detail = "Add your Gemini and Anthropic API keys in Settings to get the recap."
+                    $0.detail = "Add your Gemini and Anthropic API keys in Settings to transcribe and summarize."
                 }
             }
             return
         }
         running = true
         Task {
-            await run(next, gemini: Gemini(key: geminiKey), claude: Claude(key: anthropicKey))
+            await run(next, gemini: gemini, claude: claude)
             running = false
             runNext()
         }
@@ -60,21 +72,27 @@ final class Processor {
             var transcript = library.transcript(item)
             if transcript?.isEmpty != false {
                 library.update(id) { $0.status = .transcribing; $0.detail = "Uploading the recording…" }
-                let text = try await gemini.transcribe(library.audioURL(item), prompt: RecapPrompts.transcription) { message in
+                let checkpoint = Recordings.inProgress.deletingLastPathComponent()
+                    .appendingPathComponent("Transcription", isDirectory: true).appendingPathComponent(item.id + ".json")
+                let text = try await gemini.transcribe(library.audioURL(item), prompt: RecapPrompts.transcription,
+                                                     checkpoint: checkpoint, preparedDuration: { seconds in
+                    self.library.update(id) { $0.duration = seconds }
+                }) { message in
                     Task { @MainActor in self.library.update(id) { $0.detail = message } }
                 }
                 try text.write(to: library.transcriptURL(item), atomically: true, encoding: .utf8)
+                try? FileManager.default.removeItem(at: checkpoint)
+                try? FileManager.default.removeItem(at: checkpoint.deletingPathExtension().appendingPathExtension("wav"))
                 transcript = text
                 log.notice("Transcribed \(id, privacy: .public) in \(Int(Date().timeIntervalSince(started))) s (\(text.count) characters)")
             }
             library.update(id) { $0.status = .writing; $0.detail = "Writing the recap…" }
-            let date = item.created.formatted(.dateTime.day().month(.wide).year().hour().minute())
-            // A name given meanwhile is what the recording is called.
             let name = library.item(id)?.name
             let request = RecapPrompts.recapRequest(
-                recording: name ?? item.id, named: name != nil, date: date, seconds: item.duration, app: item.app,
+                recording: name ?? item.id, named: name != nil || item.app == nil,
+                date: item.created.formatted(.dateTime.day().month(.wide).year().hour().minute()),
+                seconds: library.item(id)?.duration ?? item.duration, app: item.app,
                 transcriptFile: library.transcriptURL(item).lastPathComponent, transcript: transcript ?? "")
-            // The topic times are kept beside the recap, so the .md is only the recap.
             let (reply, times) = RecapFormat.splitTopicTimes(try await claude.recap(system: RecapPrompts.recapSystem, request: request))
             let recap = RecapFormat.flattened(reply)
             try (recap + "\n").write(to: library.recapURL(item), atomically: true, encoding: .utf8)
@@ -88,6 +106,7 @@ final class Processor {
             }
             log.notice("Recap for \(id, privacy: .public) ready after \(Int(Date().timeIntervalSince(started))) s")
             let named = library.applyName(id)
+            guard notify else { return }
             let title = library.item(named)?.displayTitle ?? "Your meeting"
             let topics = RecapDocument(recap).sections.filter { $0.number != nil }.count
             Toast.shared.show(.init(

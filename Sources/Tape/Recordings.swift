@@ -6,14 +6,23 @@ import os
 /// being recorded its audio is in Application Support (so nothing half-written shows up in the folder);
 /// anything left there by a crash is finished on the next launch.
 enum Recordings {
+    #if DEBUG
+    static var testingRoot: URL?
+    #endif
     private static let log = Logger(subsystem: "io.github.h-thavy.tape", category: "recordings")
 
     static var folder: URL {
-        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Tape", isDirectory: true)
+        #if DEBUG
+        if let testingRoot { return testingRoot.appendingPathComponent("Recordings", isDirectory: true) }
+        #endif
+        return FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Tape", isDirectory: true)
     }
 
     static var inProgress: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        #if DEBUG
+        if let testingRoot { return testingRoot.appendingPathComponent("Support/Recording", isDirectory: true) }
+        #endif
+        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Tape/Recording", isDirectory: true)
     }
 

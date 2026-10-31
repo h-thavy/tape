@@ -341,7 +341,7 @@ enum Importer {
                     id: "import", symbol: "square.and.arrow.down",
                     title: added.count == 1 ? "Imported" : "Imported \(added.count) recordings",
                     message: added.count == 1 ? first.displayTitle + (auto ? " · recap starts now" : "") : (auto ? "Their recaps start now" : nil),
-                    primary: auto ? open : .init(title: added.count == 1 ? "Make recap" : "Make recaps", symbol: "sparkles") {
+                    primary: auto ? open : .init(title: "Transcribe + summarize", symbol: "sparkles") {
                         for item in added { Processor.shared.process(item.id) }
                     },
                     secondary: auto ? nil : open,
@@ -367,7 +367,7 @@ struct ReaderPane: View {
             VStack(spacing: 14) {
                 TapeMarkView(size: 72)
                 Text("Your meetings appear here").font(Theme.display(20, .semibold))
-                Text("When a call starts, Tape asks whether to record it. When it ends, the recording is saved and turned into a transcript and a recap.")
+                Text("When a call starts, Tape asks whether to record it. When it ends, select Transcribe + summarize for the full transcript and a detailed English meeting recap.")
                     .font(Theme.sans(13.5)).foregroundStyle(Theme.ink2).multilineTextAlignment(.center).frame(maxWidth: 420)
                 if !settings.hasKeys {
                     Button("Add API keys") { main.page = .settings }.buttonStyle(.pill)
@@ -407,7 +407,7 @@ private struct SelectionPane: View {
                 let waiting = items.filter { $0.status == .notProcessed || $0.status == .failed }
                 if !waiting.isEmpty {
                     Button { for item in waiting { Processor.shared.process(item.id) } } label: {
-                        Label(waiting.count == 1 ? "Make 1 recap" : "Make \(waiting.count) recaps", systemImage: "sparkles")
+                        Label(waiting.count == 1 ? "Transcribe + summarize" : "Summarize \(waiting.count) recordings", systemImage: "sparkles")
                     }
                     .buttonStyle(.pillQuiet)
                 }
@@ -447,7 +447,8 @@ private struct Reader: View {
                 }
 
                 MeetingMap(player: player, transcript: transcript, topics: recap?.sections ?? [], duration: item.duration)
-                    .onAppear { player.load(Library.shared.audioURL(item)) }
+                    .onAppear { player.load(Library.shared.audioURL(item), duration: item.duration) }
+                    .onChange(of: item.duration) { player.updateDuration(item.duration) }
 
                 StatusBanner(item: item)
 
@@ -647,15 +648,15 @@ private struct StatusBanner: View {
             EmptyView()
         case .queued, .transcribing, .writing:
             banner(icon: AnyView(Spinner(size: 13, color: Theme.working)), text: item.detail ?? "Waiting…",
-                   detail: item.status == .transcribing ? "Gemini is listening to the call. A long meeting takes a few minutes." : nil)
+                   detail: item.status == .transcribing ? "Gemini is listening to the call. Long meetings can take several minutes per part." : nil)
         case .waitingForKeys:
-            banner(icon: AnyView(Image(systemName: "key").foregroundStyle(Theme.ink2)), text: "Add your API keys to get the recap.", detail: nil) {
+            banner(icon: AnyView(Image(systemName: "key").foregroundStyle(Theme.ink2)), text: "Add your Gemini and Anthropic API keys to get the recap.", detail: nil) {
                 Button("Open Settings") { MainWindow.shared.page = .settings }.buttonStyle(.pillQuiet).controlSize(.small)
             }
         case .notProcessed:
             banner(icon: AnyView(Image(systemName: "sparkles").foregroundStyle(Theme.ink2)), text: "No recap yet",
-                   detail: "Gemini writes the transcript and Claude the recap, with your API keys (\(Self.estimate(item.duration))).") {
-                Button { Processor.shared.process(item.id) } label: { Label("Make recap", systemImage: "sparkles") }
+                   detail: "Gemini writes the Khmer/English transcript; Claude writes a detailed English recap with decisions, open questions and next steps, using your API keys (\(Self.estimate(item.duration))).") {
+                Button { Processor.shared.process(item.id) } label: { Label("Transcribe + summarize", systemImage: "sparkles") }
                     .buttonStyle(.pill).controlSize(.small)
             }
         case .failed:
@@ -671,7 +672,7 @@ private struct StatusBanner: View {
     static func estimate(_ seconds: Double) -> String {
         let minutes = max(1, Int((seconds / 60).rounded()))
         let audio = Int(seconds * 32 / 1000), text = Int(seconds * 3 / 1000)
-        return "\(minutes) min of audio: about \(max(1, audio))k tokens for Gemini, \(max(1, text))k for Claude"
+        return "\(minutes) min of audio: about \(max(1, audio))k audio tokens and \(max(1, text))k transcript tokens for Claude"
     }
 
     private func banner(icon: AnyView, text: String, detail: String?,
@@ -705,21 +706,22 @@ final class AudioPlayer: ObservableObject {
     private var player: AVPlayer?
     private var observer: Any?
 
-    func load(_ url: URL) {
+    func load(_ url: URL, duration: Double) {
+        stop()
+        updateDuration(duration)
         let player = AVPlayer(url: url)
         self.player = player
-        Task {
-            if let length = try? await AVURLAsset(url: url).load(.duration), length.isNumeric { duration = length.seconds }
-        }
         observer = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.25, preferredTimescale: 600), queue: .main) { [weak self] time in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.time = time.seconds
-                if let item = player.currentItem, item.duration.isNumeric { self.duration = item.duration.seconds }
                 if self.playing, player.rate == 0 { self.playing = false }
             }
         }
     }
+
+    /// The library's decoded duration is authoritative; some containers overstate their timeline.
+    func updateDuration(_ seconds: Double) { duration = seconds.isFinite ? max(0, seconds) : 0 }
 
     func toggle() {
         guard let player else { return }
@@ -733,8 +735,9 @@ final class AudioPlayer: ObservableObject {
     }
 
     func seek(to seconds: Double, play: Bool = false) {
-        player?.seek(to: CMTime(seconds: max(0, seconds), preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
-        time = max(0, seconds)
+        let target = duration > 0 ? min(duration, max(0, seconds)) : max(0, seconds)
+        player?.seek(to: CMTime(seconds: target, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+        time = target
         if play, !playing { toggle() }
     }
 
@@ -758,7 +761,7 @@ private struct MeetingMap: View {
     let duration: Double
     @State private var scrubbing: Double?
 
-    private var total: Double { max(player.duration, duration, transcript?.turns.last?.end ?? 0, 1) }
+    private var total: Double { max(duration > 0 ? duration : player.duration, 1) }
     private var now: Double { scrubbing ?? player.time }
 
     var body: some View {

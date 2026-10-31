@@ -1,4 +1,4 @@
-import AVFoundation
+import CryptoKit
 import Foundation
 import TapeCore
 import os
@@ -11,65 +11,211 @@ struct Gemini {
     private static let base = URL(string: "https://generativelanguage.googleapis.com")!
 
     let key: String
+    private let endpoint: URL
+    private let session: URLSession
+    private let preparedAudio: ((URL) throws -> Void)?
+    private let maximumConcurrentPieces: Int
     private let log = Logger(subsystem: "io.github.h-thavy.tape", category: "gemini")
+
+    init(key: String, endpoint: URL = Self.base, session: URLSession = .shared,
+         maximumConcurrentPieces: Int = 3,
+         preparedAudio: ((URL) throws -> Void)? = nil) {
+        self.key = key
+        self.endpoint = endpoint
+        self.session = session
+        self.preparedAudio = preparedAudio
+        self.maximumConcurrentPieces = max(1, min(maximumConcurrentPieces, 3))
+    }
 
     struct Failure: LocalizedError {
         let message: String
         /// A failure on Gemini's side that may not happen again.
         var retryable = false
+        /// Discard partial output and retry smaller, non-overlapping audio pieces.
+        var splitAudio = false
         var errorDescription: String? { message }
     }
 
-    /// Recordings longer than this go in parts: Gemini fails on long audio in one go ("There was a problem
-    /// processing your request", every time, on a 32-minute call).
-    static let partLength: Double = 10 * 60
+    static let partLength: Double = 5 * 60
+    private static let minimumPiece: Int = 60 * AudioPreparation.sampleRate
 
-    func transcribe(_ original: URL, prompt: String, progress: @escaping (String) -> Void) async throws -> String {
-        // Sent as Gemini hears it: 16 kHz mono (it reduces audio to that itself), about a third of the size.
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("tape-gemini-\(UUID().uuidString)")
+    private struct Checkpoint: Codable, Sendable {
+        var fingerprint: String
+        var preparedDigest: String?
+        var pieces: [String: String] = [:]
+        var split: Set<String> = []
+    }
+
+    /// Serialize read/modify/write operations while independent audio pieces finish out of order.
+    private actor CheckpointStore {
+        private var state: Checkpoint
+        private let url: URL?
+
+        init(_ state: Checkpoint, url: URL?) {
+            self.state = state
+            self.url = url
+        }
+
+        func text(_ key: String) -> String? { state.pieces[key] }
+        func wasSplit(_ key: String) -> Bool { state.split.contains(key) }
+        func complete(_ key: String, text: String) throws {
+            state.pieces[key] = text
+            try save()
+        }
+        func split(_ key: String) throws {
+            state.split.insert(key)
+            try save()
+        }
+        private func save() throws {
+            guard let url else { return }
+            try JSONEncoder().encode(state).write(to: url, options: .atomic)
+        }
+    }
+
+    func transcribe(_ audio: URL, prompt: String, checkpoint: URL? = nil,
+                    preparedDuration: @escaping @MainActor (Double) -> Void = { _ in },
+                    progress: @escaping (String) -> Void) async throws -> String {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("tape-parts-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
-        var audio = original
-        progress("Preparing the audio…")
-        let speech = folder.appendingPathComponent("speech.m4a")
-        do {
-            try await Self.speechAudio(original, to: speech)
-            audio = speech
-            let size = { (url: URL) in (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0 }
-            log.notice("Audio for Gemini: \(size(original) / 1024) KB → \(size(speech) / 1024) KB")
-        } catch {
-            log.error("Couldn't convert the audio (\(error.localizedDescription, privacy: .public)); sending it as it is")
+        func digest(_ url: URL, suffix: String = "") throws -> String {
+            let file = try FileHandle(forReadingFrom: url)
+            defer { try? file.close() }
+            var hash = SHA256()
+            while let data = try file.read(upToCount: 1_048_576), !data.isEmpty {
+                try Task.checkCancellation()
+                hash.update(data: data)
+            }
+            hash.update(data: Data(suffix.utf8))
+            return hash.finalize().map { String(format: "%02x", $0) }.joined()
         }
-        let duration = (try? await AVURLAsset(url: audio).load(.duration).seconds) ?? 0
-        guard duration > Self.partLength * 1.2 else {
-            return try await withRetry { try await transcribeFile(audio, prompt: prompt, progress: progress) }
+        // Hash original bytes: separate decodes can differ through resampling/dither and end padding.
+        let fingerprint = try digest(audio, suffix: Self.model + "|high|300s-pcm-v3|" + prompt +
+            RecapPrompts.transcription(part: 1, of: 1, previous: "checkpoint context"))
+        var state = Checkpoint(fingerprint: fingerprint)
+        var prepared = folder.appendingPathComponent("recording.wav")
+        let cachedAudio = checkpoint?.deletingPathExtension().appendingPathExtension("wav")
+        if let checkpoint, let data = try? Data(contentsOf: checkpoint),
+           let saved = try? JSONDecoder().decode(Checkpoint.self, from: data), saved.fingerprint == fingerprint,
+           let cachedAudio, let expected = saved.preparedDigest,
+           (try? AudioPreparation.frames(in: cachedAudio)) != nil, (try? digest(cachedAudio)) == expected {
+            state = saved
+            prepared = cachedAudio
         }
-        let count = Int((duration / Self.partLength).rounded(.up))
-        var transcript: [String] = []
-        for index in 0..<count {
-            let start = Double(index) * Self.partLength
-            let part = folder.appendingPathComponent("part \(index + 1).m4a")
-            try await Self.cut(audio, from: start, length: min(Self.partLength, duration - start), to: part)
-            // The end of the part before, so the same voices keep the same labels.
-            let previous = transcript.last.map { $0.components(separatedBy: "\n").suffix(12).joined(separator: "\n") }
-            let text = try await withRetry {
-                try await transcribeFile(part, prompt: RecapPrompts.transcription(part: index + 1, of: count, previous: previous)) { message in
-                    progress("Part \(index + 1) of \(count): \(message.lowercased())")
+        func save() throws {
+            guard let checkpoint else { return }
+            try FileManager.default.createDirectory(at: checkpoint.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONEncoder().encode(state).write(to: checkpoint, options: .atomic)
+        }
+        if state.preparedDigest == nil {
+            progress("Preparing 16 kHz mono audio…")
+            try await AudioPreparation.wav(from: audio, to: prepared)
+            state.preparedDigest = try digest(prepared)
+            if let cachedAudio {
+                try FileManager.default.createDirectory(at: cachedAudio.deletingLastPathComponent(), withIntermediateDirectories: true)
+                if FileManager.default.fileExists(atPath: cachedAudio.path) {
+                    _ = try FileManager.default.replaceItemAt(cachedAudio, withItemAt: prepared)
+                } else {
+                    try FileManager.default.moveItem(at: prepared, to: cachedAudio)
+                }
+                prepared = cachedAudio
+            }
+            try save()
+        }
+        try preparedAudio?(prepared)
+        let total = try AudioPreparation.frames(in: prepared)
+        let rate = AudioPreparation.sampleRate
+        await preparedDuration(Double(total) / Double(rate))
+        let pieceFrames = Int(Self.partLength) * rate
+        let count = (total + pieceFrames - 1) / pieceFrames
+        let sharedAudio = prepared
+        let store = CheckpointStore(state, url: checkpoint)
+        func piece(start: Int, frames: Int, label: String, number: Int, previous: String?) async throws -> String {
+            try Task.checkCancellation()
+            let key = "\(start):\(frames)"
+            if let saved = await store.text(key), !saved.isEmpty {
+                progress("\(label): reusing saved transcript…")
+                return saved
+            }
+            if !(await store.wasSplit(key)) {
+                let wav = folder.appendingPathComponent("\(key).wav")
+                try AudioPreparation.slice(sharedAudio, start: start, count: frames, to: wav)
+                defer { try? FileManager.default.removeItem(at: wav) }
+                let context = RecapPrompts.transcription(part: number, of: count, previous: previous)
+                let requestPrompt = prompt + "\n\n" + context.replacingOccurrences(of: RecapPrompts.transcription, with: "")
+                do {
+                    let raw = try await withRetry {
+                        try await transcribePrepared(wav, prompt: requestPrompt) { progress("\(label): \($0.lowercased())") }
+                    }
+                    let cleaned = Transcript.cleanedPart(raw)
+                    guard !cleaned.isEmpty else { throw Failure(message: "Gemini returned no transcript lines.", splitAudio: true) }
+                    let text = Transcript.shifted(cleaned, by: Double(start) / Double(rate))
+                    try await store.complete(key, text: text)
+                    log.notice("Completed audio piece at \(start / rate) s, length \(Double(frames) / Double(rate)) s")
+                    return text
+                } catch let failure as Failure where failure.splitAudio {
+                    guard frames > Self.minimumPiece else {
+                        throw Failure(message: "Gemini couldn't finish even a short audio piece. Completed pieces are saved; try again.")
+                    }
+                    try await store.split(key)
+                    progress("\(label): retrying in smaller pieces…")
                 }
             }
-            transcript.append(Transcript.shifted(Transcript.cleanedPart(text), by: start))
-            log.notice("Transcribed part \(index + 1) of \(count)")
+            let half = frames / 2
+            let first = try await piece(start: start, frames: half, label: label + ".1", number: number, previous: previous)
+            let second = try await piece(start: start + half, frames: frames - half, label: label + ".2", number: number,
+                                         previous: first.components(separatedBy: "\n").suffix(12).joined(separator: "\n"))
+            let text = first + "\n\n" + second
+            try await store.complete(key, text: text)
+            return text
+        }
+        func part(_ index: Int, previous: String?) async throws -> String {
+            let start = index * pieceFrames
+            return try await piece(start: start, frames: min(pieceFrames, total - start),
+                                   label: "Part \(index + 1) of \(count)", number: index + 1, previous: previous)
+        }
+        // Establish speaker labels before parallel work. Each window shares the most recent completed
+        // context; recursive children remain sequential within their slot and never exceed the limit.
+        var transcript = [try await part(0, previous: nil)]
+        for lower in stride(from: 1, to: count, by: maximumConcurrentPieces) {
+            let previous = transcript.last?.components(separatedBy: "\n").suffix(12).joined(separator: "\n")
+            let upper = min(lower + maximumConcurrentPieces, count)
+            let batch = await withTaskGroup(of: (Int, Result<String, Error>).self) { group in
+                for index in lower..<upper {
+                    group.addTask {
+                        do { return (index, .success(try await part(index, previous: previous))) }
+                        catch { return (index, .failure(error)) }
+                    }
+                }
+                // Drain the window even after a failure, preserving successful peers and upload cleanup.
+                // Do not launch another window or Claude until all results in this one have succeeded.
+                var results: [(Int, Result<String, Error>)] = []
+                for await result in group { results.append(result) }
+                return results.sorted { $0.0 < $1.0 }
+            }
+            for (_, result) in batch { transcript.append(try result.get()) }
         }
         return transcript.joined(separator: "\n\n")
     }
 
-    private func transcribeFile(_ audio: URL, prompt: String, progress: @escaping (String) -> Void) async throws -> String {
+    private func transcribePrepared(_ wav: URL, prompt: String, progress: @escaping (String) -> Void) async throws -> String {
         progress("Uploading…")
-        let file = try await upload(audio)
-        defer { Task { try? await delete(file.name) } }
-        try await waitUntilActive(file.name)
-        progress("Transcribing…")
-        return try await interact(prompt: prompt, fileURI: file.uri, mimeType: file.mimeType)
+        let file = try await upload(wav)
+        do {
+            try await waitUntilActive(file.name)
+            progress("Transcribing…")
+            let transcript = try await interact(prompt: prompt, fileURI: file.uri, mimeType: file.mimeType)
+            await removeUpload(file.name)
+            return transcript
+        } catch {
+            await removeUpload(file.name)
+            throw error
+        }
+    }
+
+    private func removeUpload(_ name: String) async {
+        do { try await delete(name) }
+        catch { log.error("Couldn't delete uploaded audio from Gemini: \(error.localizedDescription, privacy: .public)") }
     }
 
     /// Tries again (twice, after 5 and 20 seconds) when Gemini fails on its side or the network drops; not
@@ -87,69 +233,6 @@ struct Gemini {
             attempt += 1
             try await Task.sleep(for: .seconds(attempt == 1 ? 5 : 20))
         }
-    }
-
-    /// The audio as speech for Gemini: 16 kHz mono AAC at 48 kbps (a call's 48 kHz stereo is reduced to this by
-    /// Gemini anyway).
-    private static func speechAudio(_ source: URL, to output: URL) async throws {
-        let asset = AVURLAsset(url: source)
-        guard let track = try await asset.loadTracks(withMediaType: .audio).first else { throw Failure(message: "The recording has no audio.") }
-        let reader = try AVAssetReader(asset: asset)
-        let pcm: [String: Any] = [AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 16_000, AVNumberOfChannelsKey: 1,
-                                  AVLinearPCMBitDepthKey: 16, AVLinearPCMIsFloatKey: false, AVLinearPCMIsBigEndianKey: false,
-                                  AVLinearPCMIsNonInterleaved: false]
-        let readerOutput = AVAssetReaderTrackOutput(track: track, outputSettings: pcm)
-        reader.add(readerOutput)
-        try? FileManager.default.removeItem(at: output)
-        let writer = try AVAssetWriter(outputURL: output, fileType: .m4a)
-        let input = AVAssetWriterInput(mediaType: .audio, outputSettings: [
-            AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 16_000, AVNumberOfChannelsKey: 1, AVEncoderBitRateKey: 48_000,
-        ])
-        input.expectsMediaDataInRealTime = false
-        writer.add(input)
-        guard reader.startReading(), writer.startWriting() else {
-            throw reader.error ?? writer.error ?? Failure(message: "Couldn't convert the audio.")
-        }
-        writer.startSession(atSourceTime: .zero)
-        let queue = DispatchQueue(label: "tape.speech-audio")
-        let finished: Bool = await withCheckedContinuation { done in
-            input.requestMediaDataWhenReady(on: queue) {
-                while input.isReadyForMoreMediaData {
-                    guard let buffer = readerOutput.copyNextSampleBuffer() else {
-                        input.markAsFinished()
-                        done.resume(returning: reader.status == .completed)
-                        return
-                    }
-                    if !input.append(buffer) {
-                        reader.cancelReading()
-                        done.resume(returning: false)
-                        return
-                    }
-                }
-            }
-        }
-        guard finished else {
-            writer.cancelWriting()
-            throw writer.error ?? reader.error ?? Failure(message: "Couldn't convert the audio.")
-        }
-        await writer.finishWriting()
-        guard writer.status == .completed else { throw writer.error ?? Failure(message: "Couldn't convert the audio.") }
-    }
-
-    /// `length` seconds of `audio` from `start`, as an .m4a (copied as it is when it's AAC, else re-encoded).
-    private static func cut(_ audio: URL, from start: Double, length: Double, to output: URL) async throws {
-        let asset = AVURLAsset(url: audio)
-        let range = CMTimeRange(start: CMTime(seconds: start, preferredTimescale: 600), duration: CMTime(seconds: length, preferredTimescale: 600))
-        for preset in [AVAssetExportPresetPassthrough, AVAssetExportPresetAppleM4A] {
-            guard let export = AVAssetExportSession(asset: asset, presetName: preset) else { continue }
-            try? FileManager.default.removeItem(at: output)
-            export.outputURL = output
-            export.outputFileType = .m4a
-            export.timeRange = range
-            await export.export()
-            if export.status == .completed { return }
-        }
-        throw Failure(message: "Couldn't split the recording into parts for Gemini.")
     }
 
     // MARK: - Files API
@@ -179,7 +262,7 @@ struct Gemini {
         upload.setValue(String(size), forHTTPHeaderField: "Content-Length")
         upload.setValue("0", forHTTPHeaderField: "X-Goog-Upload-Offset")
         upload.setValue("upload, finalize", forHTTPHeaderField: "X-Goog-Upload-Command")
-        let (data, response) = try await URLSession.shared.upload(for: upload, fromFile: audio)
+        let (data, response) = try await session.upload(for: upload, fromFile: audio)
         try check(data, response)
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let file = json["file"] as? [String: Any], let name = file["name"] as? String, let uri = file["uri"] as? String
@@ -213,7 +296,7 @@ struct Gemini {
                 ["type": "text", "text": prompt],
                 ["type": "audio", "uri": fileURI, "mime_type": mimeType],
             ],
-            "generation_config": ["thinking_level": "low", "max_output_tokens": 65_536],
+            "generation_config": ["thinking_level": "high", "max_output_tokens": 65_536],
             "background": true,
         ]
         var create = request("v1beta/interactions", method: "POST", timeout: 1800)
@@ -243,14 +326,21 @@ struct Gemini {
         switch status {
         case "completed" where !text.isEmpty:
             return text
-        case "incomplete" where !text.isEmpty:
-            log.notice("Transcript cut short (incomplete); keeping what came back")
-            return text + "\n\n[The transcript stops here: the recording was too long to transcribe in one go.]"
+        case "incomplete", "requires_continuation":
+            let usage = interaction["usage"] as? [String: Any]
+            let output = usage?["total_output_tokens"] as? Int ?? 0
+            let thoughts = usage?["total_thought_tokens"] as? Int ?? 0
+            log.notice("Transcription \(status, privacy: .public): output \(output) tokens, thinking \(thoughts) tokens; splitting audio")
+            throw Failure(message: "Gemini didn't finish this audio piece.", splitAudio: true)
+        case "completed" where text.isEmpty:
+            throw Failure(message: "Gemini returned an empty transcript.", splitAudio: true)
         default:
             let errors = (interaction["errors"] as? [[String: Any]])?.compactMap { $0["message"] as? String }.joined(separator: " ")
             log.error("Interaction \(status, privacy: .public): \(errors ?? "", privacy: .public)")
+            // Some audio pieces repeatedly fail without an explicit truncation status. Retry the original
+            // piece first; after withRetry is exhausted, piece() applies the same bounded split recovery.
             throw Failure(message: "Gemini couldn't transcribe the recording (\(status): \(errors?.isEmpty == false ? errors! : "no reason given")).",
-                          retryable: status == "failed")
+                          retryable: status == "failed", splitAudio: status == "failed")
         }
     }
 
@@ -275,14 +365,14 @@ struct Gemini {
     // MARK: - HTTP
 
     private func request(_ path: String, method: String, timeout: TimeInterval = 120) -> URLRequest {
-        var request = URLRequest(url: Self.base.appendingPathComponent(path), timeoutInterval: timeout)
+        var request = URLRequest(url: endpoint.appendingPathComponent(path), timeoutInterval: timeout)
         request.httpMethod = method
         request.setValue(key, forHTTPHeaderField: "x-goog-api-key")
         return request
     }
 
     private func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         try check(data, response)
         return (data, response as! HTTPURLResponse)
     }
