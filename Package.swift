@@ -9,7 +9,7 @@ let package = Package(
     ],
     targets: [
         // Pure logic with no system dependencies (the mixer, call and mute rules), so it can be unit tested.
-        .target(name: "TapeCore"),
+        .target(name: "TapeCore", resources: [.process("Resources")]),
         .executableTarget(name: "Tape", dependencies: ["TapeCore"]),
         .testTarget(name: "TapeCoreTests", dependencies: ["TapeCore"]),
     ]

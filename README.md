@@ -132,3 +132,28 @@ island's states as PNGs, and quits; `--env TAPE_TEST_VERSION=0.1.0
   library and reader, Settings, the introduction, theme),
   `TapeApp` (app and menu bar).
 - `scripts/`: build, release, install and icon scripts.
+
+## Export a recap as PDF
+
+Open a recording's **Recap** tab and choose **Export PDF**. Pick a filename and location in the native
+Save dialog. The exported A4 document includes the introduction, Khmer key points, numbered topics,
+topic timestamps, next steps and source note. It is generated locally, without contacting either AI
+provider or changing the original Markdown. Cancel leaves no exported file; a failed export shows an error.
+
+The print layout follows [anthropic-pdf-style](https://github.com/sopenlaz0/skills/tree/main/anthropic-pdf-style):
+warm off-white pages, a serif title, hairline rules and three metadata tiles. Tape uses locally installed
+Anthropic Sans and Serif from `/Applications/Claude.app/Contents/Resources/fonts` or `~/Library/Fonts`
+when available. These proprietary fonts are **not redistributed with Tape**. They are embedded in the
+exported PDF, so check your permission before distributing those PDFs outside your company. Without
+these fonts, export still works with the template's system-font fallbacks; the typography will differ.
+Khmer uses the Mac's available Khmer fallback font. No Chrome installation is required.
+
+For repeatable offline PDF checks on macOS:
+
+```sh
+swift test
+scripts/test-recap-pdf.sh  # sample, system-font fallback and long multi-page synthetic recaps
+```
+
+This smoke test does not open the recording library, access API keys, or call AI providers. Outputs are
+written under ignored `build/pdf-qa/`. The fixture contains invented meeting content only.
