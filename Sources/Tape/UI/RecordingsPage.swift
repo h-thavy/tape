@@ -427,6 +427,7 @@ private struct SelectionPane: View {
 private struct Reader: View {
     let item: RecordingItem
     @StateObject private var player = AudioPlayer()
+    @StateObject private var pdfExporter = RecapPDFExporter()
     @ObservedObject private var main = MainWindow.shared
 
     var body: some View {
@@ -473,6 +474,9 @@ private struct Reader: View {
             .frame(maxWidth: .infinity)
         }
         .onDisappear { player.stop() }
+        .alert("Could not export PDF", isPresented: Binding(get: { pdfExporter.error != nil }, set: { if !$0 { pdfExporter.error = nil } })) {
+            Button("OK") { pdfExporter.error = nil }
+        } message: { Text(pdfExporter.error ?? "") }
     }
 
     private var tabs: some View {
@@ -492,6 +496,13 @@ private struct Reader: View {
         let text = recapTab ? Library.shared.recap(item) : Library.shared.transcript(item)
         let file = recapTab ? Library.shared.recapURL(item) : Library.shared.transcriptURL(item)
         if let text {
+            if recapTab {
+                TextIconButton(title: pdfExporter.isExporting ? "Exporting…" : "Export PDF", systemImage: "arrow.down.document") {
+                    pdfExporter.export(item, markdown: text)
+                }
+                .disabled(pdfExporter.isExporting || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .help("Save the recap as an A4 PDF")
+            }
             CopyButton(text: text)
             TextIconButton(title: recapTab ? "Open .md" : "Open .txt", systemImage: "arrow.up.forward.square") {
                 NSWorkspace.shared.open(file)
