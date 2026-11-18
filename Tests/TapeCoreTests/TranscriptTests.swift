@@ -25,6 +25,13 @@ final class TranscriptTests: XCTestCase {
         ])
     }
 
+    func testSpeakerLabelVariants() {
+        let t = Transcript("[00:00] [Speaker 1]:  hello\n[00:05] **Speaker 2:** hi\n[00:09] Speaker 1: bye", duration: 12)
+        XCTAssertEqual(t.lines.map(\.speaker), ["Speaker 1", "Speaker 2", "Speaker 1"])
+        XCTAssertEqual(t.lines.map(\.text), ["hello", "hi", "bye"])
+        XCTAssertEqual(t.speakers.count, 2)
+    }
+
     func testUnlabelledTranscriptIsOneSpeaker() {
         let t = Transcript("[00:00] hello\n[00:30] still me", duration: 40)
         XCTAssertEqual(t.speakers, ["Speaker"])
@@ -76,6 +83,12 @@ final class TranscriptPartsTests: XCTestCase {
         XCTAssertEqual(Transcript.shifted(part, by: 3600),
                        "[1:00:05] Speaker 1: hi\nno time here\n[1:09:59] Speaker 2: [inaudible] ok")
         XCTAssertEqual(Transcript.shifted(part, by: 0), part)
+    }
+
+    func testTimestampVariantsAreKept() {
+        let part = "**[00:05]** **Speaker 1:** hi\n- [00:09] Speaker 2: ok\n(00:12) Speaker 1: bye\nnot a line"
+        XCTAssertEqual(Transcript.cleanedPart(part), "[00:05] Speaker 1: hi\n\n[00:09] Speaker 2: ok\n\n[00:12] Speaker 1: bye")
+        XCTAssertEqual(Transcript.cleanedPart("Here is the transcript.\nNo times at all."), "")
     }
 
     func testPartPromptCarriesThePreviousLines() {

@@ -109,6 +109,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             return
         }
+        // Test hook: TAPE_TEST_MODELS=<file> writes the Gemini models this key can call with generateContent, and quits.
+        if let out = ProcessInfo.processInfo.environment["TAPE_TEST_MODELS"], let key = APIKeys.get(.gemini) {
+            Task {
+                var request = URLRequest(url: URL(string: "https://generativelanguage.googleapis.com/v1beta/models?pageSize=200")!)
+                request.setValue(key, forHTTPHeaderField: "x-goog-api-key")
+                let data = (try? await URLSession.shared.data(for: request))?.0 ?? Data()
+                let models = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["models"] as? [[String: Any]] ?? []
+                let names = models.filter { ($0["supportedGenerationMethods"] as? [String])?.contains("generateContent") == true }
+                    .compactMap { $0["name"] as? String }
+                try? names.joined(separator: "\n").write(toFile: out, atomically: true, encoding: .utf8)
+                NSApp.terminate(nil)
+            }
+            return
+        }
+        // Test hook: TAPE_TEST_MODELS_ON=<audio> TAPE_TEST_COMPARE=<model,model…> TAPE_TEST_OUT=<file> sends the audio
+        // once to each model and writes how each did, and quits.
+        if let audio = ProcessInfo.processInfo.environment["TAPE_TEST_MODELS_ON"],
+           let models = ProcessInfo.processInfo.environment["TAPE_TEST_COMPARE"],
+           let out = ProcessInfo.processInfo.environment["TAPE_TEST_OUT"], let key = APIKeys.get(.gemini) {
+            Task {
+                let report = await Gemini(key: key).compare(URL(fileURLWithPath: audio), models: models.split(separator: ",").map(String.init),
+                                                            prompt: RecapPrompts.transcription)
+                try? report.write(toFile: out, atomically: true, encoding: .utf8)
+                NSApp.terminate(nil)
+            }
+            return
+        }
         // Test hook: TAPE_TEST_ISLAND=<seconds> shows "Meeting detected" for that long and quits, touching
         // nothing (for checking what screen sharing sees).
         if let seconds = ProcessInfo.processInfo.environment["TAPE_TEST_ISLAND"].flatMap(Double.init) {

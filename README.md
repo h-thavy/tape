@@ -44,7 +44,9 @@ curl -fsSL https://raw.githubusercontent.com/h-thavy/tape/main/scripts/install.s
   English) for a timestamped transcript, then to Claude (Claude Opus 5.5) for the recap: what the meeting was,
   one section per topic with the decisions, details and open questions, and the next steps. Recordings over
   12 minutes go to Gemini in 10-minute parts (it fails on long audio in one go), with the speaker labels
-  carried from one part to the next; a failure on Gemini's side is retried. Both are saved next to the
+  carried from one part to the next. When Gemini 3.8 Flash won't transcribe a part (it stops on some recordings
+  again and again), Gemini 3.5 Flash gets the same upload; a stretch that still fails is split smaller, and
+  only what fails at under a minute is left as a marked gap, so one bad stretch never costs the recording. Both are saved next to the
   recording and shown in the app. The recap opens with **សង្ខេប**, 2 to 4 key points in Khmer, then the
   detailed recap in English; in the app, a map of the meeting shows who spoke when and where each topic
   starts (click to play from there). Recaps use your keys' credits, so none is made until you ask, unless

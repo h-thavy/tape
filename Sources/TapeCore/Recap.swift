@@ -24,10 +24,19 @@ public enum RecapPrompts {
     /// For one part of a long recording (sent in parts: Gemini fails on long audio in one go). Times are
     /// written from the start of the part and moved onto the whole recording's clock afterwards.
     public static func transcription(part: Int, of count: Int, previous: String?) -> String {
+        transcription(of: "part \(part) of \(count)", previous: previous)
+    }
+
+    /// For a stretch of a long recording sent on its own (a part Gemini kept failing on, split smaller).
+    public static func transcription(continuing previous: String?) -> String {
+        transcription(of: "a short stretch", previous: previous)
+    }
+
+    private static func transcription(of what: String, previous: String?) -> String {
         var text = transcription + """
 
 
-            This is part \(part) of \(count) of a longer recording. Write the times from the start of this part \
+            This is \(what) of a longer recording. Write the times from the start of this part \
             ([00:00] is where this part begins). Reply with transcript lines only, each starting with its time: \
             no introduction, notes or comments.
             """

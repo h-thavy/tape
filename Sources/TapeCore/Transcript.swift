@@ -25,7 +25,8 @@ public struct Transcript: Equatable {
 
     /// `duration` is the recording's length (the last turn runs to it).
     public init(_ text: String, duration: Double) {
-        let pattern = try! NSRegularExpression(pattern: #"^\[((?:\d+:)?\d{1,2}:\d{2})\]\s*(?:([^:\[\]]{1,40}):\s+)?(.*)$"#)
+        // The speaker as "Speaker 1:" or, from some models, "[Speaker 1]:" or "**Speaker 1:**".
+        let pattern = try! NSRegularExpression(pattern: #"^\[((?:\d+:)?\d{1,2}:\d{2})\]\s*(?:\**\[?([^:\[\]*]{1,40})\]?:\**\s+)?(.*)$"#)
         var lines: [Line] = []
         for (index, raw) in text.components(separatedBy: "\n").enumerated() {
             let line = raw.trimmingCharacters(in: .whitespaces)
@@ -80,11 +81,16 @@ public struct Transcript: Equatable {
     /// transcript…"), the model reasoning about who is who, and notes in brackets about the speakers. Every
     /// transcript line starts with its time, so lines that don't are dropped.
     public static func cleanedPart(_ text: String) -> String {
-        let timed = try! NSRegularExpression(pattern: #"^\s*\[(?:\d+:)?\d{1,2}:\d{2}\]"#)
+        // "[05:12]", and the variants models sometimes write: "**[05:12]**", "- [05:12]", "(05:12)".
+        let timed = try! NSRegularExpression(pattern: #"^[\s*•-]*[\[(]((?:\d+:)?\d{1,2}:\d{2})[\])]\**\s*"#)
         let note = try! NSRegularExpression(pattern: #"\s*\((?:This is|Note|Speaker \d+ (?:is|continu))[^)]*\)"#, options: .caseInsensitive)
         return text.components(separatedBy: "\n").compactMap { line in
-            guard timed.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)) != nil else { return nil }
-            return note.stringByReplacingMatches(in: line, range: NSRange(line.startIndex..., in: line), withTemplate: "")
+            let range = NSRange(line.startIndex..., in: line)
+            guard let match = timed.firstMatch(in: line, range: range), let stamp = Range(match.range(at: 1), in: line),
+                  let whole = Range(match.range, in: line) else { return nil }
+            let rest = String(line[whole.upperBound...]).replacingOccurrences(of: #"^\*\*([^*]+)\*\*"#, with: "$1", options: .regularExpression)
+            let cleaned = "[\(line[stamp])] " + rest
+            return note.stringByReplacingMatches(in: cleaned, range: NSRange(cleaned.startIndex..., in: cleaned), withTemplate: "")
         }.joined(separator: "\n\n")
     }
 
