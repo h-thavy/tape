@@ -134,3 +134,9 @@ island's states as PNGs, and quits; `--env TAPE_TEST_VERSION=0.1.0
   library and reader, Settings, the introduction, theme),
   `TapeApp` (app and menu bar).
 - `scripts/`: build, release, install and icon scripts.
+
+## Find recaps in Claude Desktop
+
+The optional [Tape Recaps extension](integrations/claude-desktop/README.md) lets
+Claude Desktop search and read local Markdown recaps in a regular chat. It does
+not read recordings or transcripts or upload files in the background.
