@@ -159,3 +159,9 @@ scripts/test-recap-pdf.sh  # sample, system-font fallback and long multi-page sy
 
 This smoke test does not open the recording library, access API keys, or call AI providers. Outputs are
 written under ignored `build/pdf-qa/`. The fixture contains invented meeting content only.
+
+## Find recaps in Claude Desktop
+
+The optional [Tape Recaps extension](integrations/claude-desktop/README.md) lets
+Claude Desktop search and read local Markdown recaps in a regular chat. It does
+not read recordings or transcripts or upload files in the background.

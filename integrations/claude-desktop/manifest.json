@@ -1,0 +1,31 @@
+{
+  "manifest_version": "0.3",
+  "name": "tape-recaps",
+  "display_name": "Tape Recaps",
+  "version": "0.1.0",
+  "description": "Find and read Tape meeting recaps locally from Claude Desktop.",
+  "author": { "name": "Tape contributors" },
+  "server": {
+    "type": "node",
+    "entry_point": "server/index.cjs",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/server/index.cjs"],
+      "env": {"TAPE_RECAPS_DIR": "${user_config.recaps_folder}"}
+    }
+  },
+  "compatibility": { "platforms": ["darwin"], "runtimes": { "node": ">=20" } },
+  "user_config": {
+    "recaps_folder": {
+      "type": "directory",
+      "title": "Tape recap folder",
+      "description": "Select the local Tape folder or a separate folder containing only recaps you want available to Claude.",
+      "default": "${DOCUMENTS}/Tape",
+      "required": true
+    }
+  },
+  "tools": [
+    { "name": "search_recaps", "description": "Search Tape recaps or list recent meetings." },
+    { "name": "get_recap", "description": "Read one Tape Markdown recap by ID." }
+  ]
+}
